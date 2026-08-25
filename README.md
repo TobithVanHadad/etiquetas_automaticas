@@ -18,6 +18,15 @@ npm run build
 npm run dev
 ```
 
+Builds separados para deploy:
+
+```bash
+npm run build:api
+npm run build:web
+npm run start:api
+npm run start:web
+```
+
 Web: `http://localhost:3000`
 
 API: `http://localhost:4000`
@@ -127,6 +136,21 @@ La impresora detectada en este equipo es `ZDesigner ZT610-203dpi ZPL`.
 La UI incluye `Imprimir`, que pide confirmacion antes de enviar ZPL RAW a Windows. Para una prueba sin papel, el endpoint acepta `dryRun: true` y devuelve el ZPL sin mandarlo al spooler.
 
 En Railway/Linux el endpoint genera ZPL, pero no puede imprimir fisicamente en una Zebra conectada por USB a una computadora local. Para impresion real se debe usar el equipo Windows conectado a la impresora o un agente local de impresion.
+
+## Deploy Railway
+
+Este repo es un monorepo npm compartido. En Railway se recomienda crear dos servicios desde el mismo repo de GitHub:
+
+- Servicio API: build command `npm run build:api`, start command `npm run start:api`.
+- Servicio Web: build command `npm run build:web`, start command `npm run start:web`.
+
+Variable requerida en el servicio Web:
+
+```bash
+NEXT_PUBLIC_API_URL=https://TU-DOMINIO-DE-API.up.railway.app
+```
+
+El servicio API usa `PORT` de Railway automaticamente. Despues se puede apuntar un subdominio de Cloudflare al dominio publico de Railway con un `CNAME`, sin tunel.
 
 ## Nota industrial
 
