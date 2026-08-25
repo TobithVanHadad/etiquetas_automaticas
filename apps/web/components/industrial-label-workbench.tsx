@@ -1,0 +1,2686 @@
+"use client";
+
+import {
+  AlertTriangle,
+  Bold,
+  Database,
+  Download,
+  FileCode2,
+  Languages,
+  Minus,
+  Paperclip,
+  Plus,
+  Printer,
+  RefreshCw,
+  Save,
+  Send,
+  Table2,
+  Trash2,
+  X,
+  Upload
+} from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  composeLabel,
+  generateZpl,
+  NUTRIENT_CATALOG,
+  OFFICIAL_COMBINATIONS,
+  sampleProduct,
+  SECTION_LABELS,
+  SUPPORTED_LANGUAGES,
+  type LabelSpec,
+  type LabelAttachment,
+  type LanguageCode,
+  type NutritionRow,
+  type ProductLanguageContent,
+  type ProductRecord
+} from "@industrial-label/core";
+import { LabelPreview } from "./label-preview";
+
+const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
+const DEFAULT_PRINTER = "ZDesigner ZT610-203dpi ZPL";
+const LABEL_ATTACHMENT_ACCEPT =
+  ".pdf,.nlbl,.btw,image/png,image/jpeg,image/webp,image/gif";
+const MAX_LABEL_ATTACHMENT_BYTES = 15 * 1024 * 1024;
+const MAX_LABEL_ATTACHMENTS_TOTAL_BYTES = 45 * 1024 * 1024;
+
+type WorkbenchNotice = {
+  tone: "success" | "error" | "info";
+  message: string;
+};
+
+type RawImportResult = {
+  detected: string[];
+  missing: string[];
+  warnings: string[];
+};
+
+export function IndustrialLabelWorkbench() {
+  const [product, setProduct] = useState<ProductRecord>(
+    withDefaultProductMetadata(sampleProduct)
+  );
+  const [products, setProducts] = useState<ProductRecord[]>([
+    withDefaultProductMetadata(sampleProduct)
+  ]);
+  const [languages, setLanguages] = useState<LanguageCode[]>([
+    "DE",
+    "ES",
+    "FR",
+    "NL",
+    "EN"
+  ]);
+  const [activeLanguage, setActiveLanguage] = useState<LanguageCode>("DE");
+  const [label, setLabel] = useState<Required<LabelSpec>>({
+    widthMm: 100,
+    heightMm: 150,
+    dpi: 203,
+    marginMm: 4,
+    fontFamily: "zebra",
+    zplFontRegular: "E:ARIAL.TTF",
+    zplFontBold: "E:ARIALBD.TTF",
+    visualPreset: "crevel-current",
+    nutritionTableWidthPercent: 64,
+    nutritionTableAlign: "right",
+    nutritionValueColumnPercent: 25,
+    nutritionLabelColumnPercent: 58,
+    nutritionTableBottomOffsetMm: 0,
+    nutritionTableRowPaddingMm: 0.55,
+    nutritionTableFontScalePercent: 100,
+    nutritionShowServing: false,
+    nutritionShowRiPercent: false
+  });
+  const [zoom, setZoom] = useState(1);
+  const [exportText, setExportText] = useState("");
+  const [rawText, setRawText] = useState("");
+  const [rawImportResult, setRawImportResult] = useState<RawImportResult | null>(
+    null
+  );
+  const [notice, setNotice] = useState<WorkbenchNotice | null>(null);
+  const [apiStatus, setApiStatus] = useState<"checking" | "online" | "offline">(
+    "checking"
+  );
+  const [selectedNutrient, setSelectedNutrient] = useState("vitamin_d");
+
+  useEffect(() => {
+    fetch(`${API_URL}/products`)
+      .then((response) => response.json())
+      .then((payload: { products?: ProductRecord[] }) => {
+        if (payload.products?.length) {
+          const hydratedProducts = payload.products.map(withDefaultProductMetadata);
+          setProducts(hydratedProducts);
+          setProduct(hydratedProducts[0]);
+        }
+        setApiStatus("online");
+      })
+      .catch(() => setApiStatus("offline"));
+  }, []);
+
+  const layout = useMemo(
+    () =>
+      composeLabel({
+        product,
+        languages,
+        label
+      }),
+    [product, languages, label]
+  );
+
+  const selectedContent = product.languages[activeLanguage] ?? {};
+  const labelAttachments = useMemo(() => getLabelAttachments(product), [product]);
+  const nutritionBaseMeasure = `${product.nutrition.baseQuantity || "100"} ${
+    product.nutrition.baseUnit || "g"
+  }`;
+  const nutritionEditorGridTemplate = `minmax(0,1fr) 94px${
+    label.nutritionShowServing ? " 94px" : ""
+  }${label.nutritionShowRiPercent ? " 62px" : ""} 34px`;
+  const validationIssues = useMemo(
+    () => getProductValidationIssues(product, languages),
+    [product, languages]
+  );
+
+  function updateProduct(next: Partial<ProductRecord>) {
+    setProduct((current) => ({
+      ...current,
+      ...next
+    }));
+  }
+
+  function updateProductMetadata(field: "status" | "notes" | "files", value: string) {
+    setProduct((current) =>
+      withDefaultProductMetadata({
+        ...current,
+        metadata: {
+          ...current.metadata,
+          [field]: value
+        }
+      })
+    );
+  }
+
+  function updateLanguageContent(
+    language: LanguageCode,
+    field: keyof NonNullable<ProductRecord["languages"][LanguageCode]>,
+    value: string
+  ) {
+    setProduct((current) => ({
+      ...current,
+      languages: {
+        ...current.languages,
+        [language]: {
+          ...current.languages[language],
+          [field]: value
+        }
+      }
+    }));
+  }
+
+  function toggleLanguage(language: LanguageCode) {
+    setLanguages((current) => {
+      if (current.includes(language)) {
+        const next = current.filter((item) => item !== language);
+        return next.length ? next : current;
+      }
+
+      return [...current, language];
+    });
+    setActiveLanguage(language);
+  }
+
+  async function persistProduct(
+    productToSave: ProductRecord,
+    successMessage = "Producto guardado."
+  ) {
+    try {
+      const response = await fetch(`${API_URL}/products`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(cleanProduct(productToSave))
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+
+      const payload = (await response.json()) as { product: ProductRecord };
+      const hydrated = withDefaultProductMetadata(payload.product);
+      setProduct(hydrated);
+      setProducts((current) => upsertLocalProduct(current, hydrated));
+      setApiStatus("online");
+      setNotice({ tone: "success", message: successMessage });
+      return hydrated;
+    } catch (error) {
+      setApiStatus("offline");
+      setNotice({
+        tone: "error",
+        message: `No se pudo guardar en el servidor: ${String(error)}`
+      });
+      throw error;
+    }
+  }
+
+  async function saveProduct() {
+    await persistProduct(product);
+  }
+
+  async function exportFromApi(kind: "zpl" | "btxml" | "json" | "csv") {
+    try {
+      const response = await fetch(`${API_URL}/export/${kind}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ product: cleanProduct(product), languages, label })
+      });
+      const payload = await response.json();
+      setExportText(payload[kind] ?? "");
+      setApiStatus("online");
+    } catch {
+      setApiStatus("offline");
+      setExportText(
+        kind === "zpl" ? generateZpl(layout) : JSON.stringify(product, null, 2)
+      );
+    }
+  }
+
+  async function printTestLabel() {
+    const confirmed = window.confirm(
+      `Enviar una etiqueta de prueba a ${DEFAULT_PRINTER}?`
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    try {
+      const response = await fetch(`${API_URL}/print/zebra`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          product: cleanProduct(product),
+          languages,
+          label,
+          printer: { name: DEFAULT_PRINTER },
+          dryRun: false
+        })
+      });
+      const payload = await response.json();
+      setExportText(JSON.stringify(payload, null, 2));
+      setApiStatus("online");
+    } catch (error) {
+      setApiStatus("offline");
+      setExportText(String(error));
+    }
+  }
+
+  function updateNutritionRow(index: number, next: Partial<NutritionRow>) {
+    setProduct((current) => {
+      const rows = [...current.nutrition.rows];
+      rows[index] = {
+        ...rows[index],
+        ...next
+      };
+
+      return {
+        ...current,
+        nutrition: {
+          ...current.nutrition,
+          rows
+        }
+      };
+    });
+  }
+
+  function updateNutritionLabel(index: number, language: LanguageCode, value: string) {
+    setProduct((current) => {
+      const rows = [...current.nutrition.rows];
+      rows[index] = {
+        ...rows[index],
+        label: {
+          ...rows[index].label,
+          [language]: value
+        }
+      };
+
+      return {
+        ...current,
+        nutrition: {
+          ...current.nutrition,
+          rows
+        }
+      };
+    });
+  }
+
+  function addNutritionRow() {
+    const item =
+      NUTRIENT_CATALOG.find((nutrient) => nutrient.id === selectedNutrient) ??
+      NUTRIENT_CATALOG[0];
+    const existingIds = new Set(product.nutrition.rows.map((row) => row.id));
+    const id = existingIds.has(item.id)
+      ? `${item.id}_${Date.now().toString(36)}`
+      : item.id;
+
+    setProduct((current) => ({
+      ...current,
+      nutrition: {
+        ...current.nutrition,
+        rows: [
+          ...current.nutrition.rows,
+          {
+            id,
+            label: item.label,
+            per100g: "",
+            perServing: "",
+            riPercent: "",
+            indent: item.indent
+          }
+        ]
+      }
+    }));
+  }
+
+  function removeNutritionRow(index: number) {
+    setProduct((current) => ({
+      ...current,
+      nutrition: {
+        ...current.nutrition,
+        rows: current.nutrition.rows.filter((_, rowIndex) => rowIndex !== index)
+      }
+    }));
+  }
+
+  async function attachLabelFiles(fileList: FileList | null) {
+    const files = Array.from(fileList ?? []);
+
+    if (!files.length) {
+      setNotice({ tone: "info", message: "No se seleccionaron archivos." });
+      return;
+    }
+
+    const invalid = files.find((file) => !isAllowedLabelAttachment(file));
+
+    if (invalid) {
+      setNotice({
+        tone: "error",
+        message: `Archivo no permitido: ${invalid.name}. Use PDF, imagen, .nlbl o .btw.`
+      });
+      return;
+    }
+
+    const tooLarge = files.find((file) => file.size > MAX_LABEL_ATTACHMENT_BYTES);
+
+    if (tooLarge) {
+      setNotice({
+        tone: "error",
+        message: `Archivo demasiado grande: ${tooLarge.name}. Maximo 15 MB por archivo.`
+      });
+      return;
+    }
+
+    const nextTotalSize =
+      getLabelAttachments(product).reduce(
+        (total, attachment) => total + attachment.size,
+        0
+      ) + files.reduce((total, file) => total + file.size, 0);
+
+    if (nextTotalSize > MAX_LABEL_ATTACHMENTS_TOTAL_BYTES) {
+      setNotice({
+        tone: "error",
+        message:
+          "Los archivos adjuntos superan 45 MB en total. Quite alguno o use archivos mas ligeros."
+      });
+      return;
+    }
+
+    try {
+      const attachments = await Promise.all(files.map(fileToLabelAttachment));
+      const nextProduct = setLabelAttachments(product, [
+        ...getLabelAttachments(product),
+        ...attachments
+      ]);
+
+      setProduct(nextProduct);
+      setProducts((current) => upsertLocalProduct(current, nextProduct));
+      await persistProduct(
+        nextProduct,
+        `${attachments.length} archivo(s) de etiqueta cargado(s).`
+      );
+    } catch (error) {
+      setNotice({
+        tone: "error",
+        message: `No se pudieron cargar los archivos: ${String(error)}`
+      });
+    }
+  }
+
+  async function removeLabelAttachment(id: string) {
+    const nextProduct = setLabelAttachments(
+      product,
+      getLabelAttachments(product).filter((attachment) => attachment.id !== id)
+    );
+
+    setProduct(nextProduct);
+    setProducts((current) => upsertLocalProduct(current, nextProduct));
+
+    try {
+      await persistProduct(nextProduct, "Archivo de etiqueta quitado.");
+    } catch {
+      // persistProduct already reports the failure.
+    }
+  }
+
+  async function importTableFile(file: File) {
+    try {
+      const text = await file.text();
+      const rows = parseDelimited(text);
+
+      if (rows.length < 2) {
+        setNotice({
+          tone: "error",
+          message: "El archivo de datos no tiene filas suficientes para importar."
+        });
+        return;
+      }
+
+      const header = rows[0].map((cell) => cell.trim());
+      const importedBySku = new Map(
+        products.map((item) => {
+          const hydrated = withDefaultProductMetadata(item);
+          return [hydrated.sku, hydrated] as const;
+        })
+      );
+      let selectedProduct = withDefaultProductMetadata(product);
+
+      rows.slice(1).forEach((row) => {
+        const record = Object.fromEntries(
+          header.map((key, index) => [key, row[index] ?? ""])
+        );
+        const sku = readImportField(record, "sku").trim() || selectedProduct.sku;
+        const base =
+          importedBySku.get(sku) ?? createImportedProductBase(sku, selectedProduct);
+        const imported = applyImportRow(base, record);
+        const next = preserveManualImportMetadata(base, imported, record);
+
+        if (next.sku !== base.sku) {
+          importedBySku.delete(base.sku);
+        }
+
+        importedBySku.set(next.sku, next);
+        selectedProduct = next;
+      });
+
+      const importedProducts = [...importedBySku.values()].sort((left, right) =>
+        left.sku.localeCompare(right.sku)
+      );
+
+      setProduct(selectedProduct);
+      setProducts(importedProducts);
+      setNotice({
+        tone: "success",
+        message: `Datos importados: ${rows.length - 1} fila(s). Los archivos y notas existentes se conservaron.`
+      });
+    } catch (error) {
+      setNotice({
+        tone: "error",
+        message: `No se pudo importar el archivo de datos: ${String(error)}`
+      });
+    }
+  }
+
+  function applyRawText() {
+    const result = parseRawLabelText(rawText, product, languages);
+    setRawImportResult({
+      detected: result.detected,
+      missing: result.missing,
+      warnings: result.warnings
+    });
+
+    if (!rawText.trim()) {
+      setNotice({
+        tone: "error",
+        message: "Pegue texto crudo de una etiqueta antes de detectar campos."
+      });
+      return;
+    }
+
+    const nextProduct = withDefaultProductMetadata(result.product);
+    setProduct(nextProduct);
+    setProducts((current) => upsertLocalProduct(current, nextProduct));
+    setLanguages(result.languages);
+    setActiveLanguage(result.languages[0] ?? activeLanguage);
+    setLabel((current) => ({
+      ...current,
+      nutritionShowServing: false,
+      nutritionShowRiPercent: false
+    }));
+    setNotice({
+      tone: result.missing.length ? "error" : "success",
+      message: result.missing.length
+        ? "Texto detectado con campos faltantes marcados en rojo."
+        : "Texto detectado y etiqueta generada."
+    });
+  }
+
+  return (
+    <main className="min-h-screen bg-[#f4f6f5] text-zinc-950">
+      <div className="grid min-h-screen grid-cols-1 xl:grid-cols-[320px_minmax(520px,1fr)_460px]">
+        <aside className="border-b border-zinc-200 bg-white p-4 xl:border-b-0 xl:border-r">
+          <div className="mb-4 flex items-center justify-between">
+            <div>
+              <h1 className="text-lg font-semibold tracking-normal">
+                Motor de etiquetas
+              </h1>
+              <p className="text-xs text-zinc-500">Zebra ZT610 - 203 DPI</p>
+            </div>
+            <span
+              className={[
+                "rounded px-2 py-1 text-xs font-medium",
+                apiStatus === "online"
+                  ? "bg-emerald-100 text-emerald-800"
+                  : apiStatus === "offline"
+                    ? "bg-amber-100 text-amber-900"
+                    : "bg-zinc-100 text-zinc-700"
+              ].join(" ")}
+            >
+              {apiStatus}
+            </span>
+          </div>
+
+          {notice ? (
+            <div
+              className={[
+                "mb-4 rounded border px-3 py-2 text-xs",
+                notice.tone === "success"
+                  ? "border-emerald-200 bg-emerald-50 text-emerald-900"
+                  : notice.tone === "error"
+                    ? "border-red-200 bg-red-50 text-red-900"
+                    : "border-zinc-200 bg-zinc-50 text-zinc-800"
+              ].join(" ")}
+            >
+              {notice.message}
+            </div>
+          ) : null}
+
+          {validationIssues.length ? (
+            <div className="mb-4 rounded border border-red-300 bg-red-50 px-3 py-2 text-xs text-red-900">
+              <div className="font-semibold">Campos faltantes</div>
+              <div className="mt-1 space-y-0.5">
+                {validationIssues.slice(0, 6).map((issue) => (
+                  <div key={issue}>{issue}</div>
+                ))}
+                {validationIssues.length > 6 ? (
+                  <div>{validationIssues.length - 6} mas...</div>
+                ) : null}
+              </div>
+            </div>
+          ) : null}
+
+          <section className="space-y-3 border-t border-zinc-200 py-4">
+            <div className="flex items-center gap-2 text-sm font-semibold">
+              <Database size={16} />
+              Catalogo
+            </div>
+            <select
+              value={product.sku}
+              onChange={(event) => {
+                const next = products.find((item) => item.sku === event.target.value);
+                if (next) {
+                  setProduct(withDefaultProductMetadata(next));
+                }
+              }}
+              className="w-full rounded border border-zinc-300 px-2 py-1.5 text-sm"
+            >
+              {products.map((item) => (
+                <option key={item.sku} value={item.sku}>
+                  {item.sku} - {item.name}
+                </option>
+              ))}
+            </select>
+            <div className="grid grid-cols-2 gap-2">
+              <label className="inline-flex min-h-9 cursor-pointer items-center justify-center gap-2 rounded border border-zinc-300 bg-white px-3 py-2 text-sm font-semibold hover:border-emerald-700 hover:bg-emerald-50">
+                <Upload size={16} />
+                Importar
+                <input
+                  type="file"
+                  accept=".csv,.tsv,.txt"
+                  className="hidden"
+                  onChange={(event) => {
+                    const file = event.target.files?.[0];
+                    if (file) {
+                      void importTableFile(file);
+                      event.currentTarget.value = "";
+                    }
+                  }}
+                />
+              </label>
+              <ActionButton onClick={() => exportFromApi("csv")} icon={<Download size={16} />}>
+                CSV
+              </ActionButton>
+            </div>
+          </section>
+
+          <section className="space-y-3 border-t border-zinc-200 py-4">
+            <div className="flex items-center gap-2 text-sm font-semibold">
+              <FileCode2 size={16} />
+              Raw text
+            </div>
+            <textarea
+              value={rawText}
+              onChange={(event) => setRawText(event.target.value)}
+              className="h-36 w-full resize-none rounded border border-zinc-300 bg-white px-2 py-1.5 font-mono text-xs outline-none"
+              placeholder="Pegue aqui el texto crudo de una etiqueta."
+            />
+            <div className="grid grid-cols-2 gap-2">
+              <ActionButton onClick={applyRawText} icon={<RefreshCw size={16} />}>
+                Detectar
+              </ActionButton>
+              <ActionButton
+                onClick={() => {
+                  setRawText("");
+                  setRawImportResult(null);
+                }}
+                icon={<X size={16} />}
+              >
+                Limpiar
+              </ActionButton>
+            </div>
+            {rawImportResult ? (
+              <div
+                className={[
+                  "rounded border px-3 py-2 text-xs",
+                  rawImportResult.missing.length
+                    ? "border-red-300 bg-red-50 text-red-900"
+                    : "border-emerald-200 bg-emerald-50 text-emerald-900"
+                ].join(" ")}
+              >
+                <div className="font-semibold">
+                  {rawImportResult.missing.length
+                    ? "Faltantes detectados"
+                    : "Campos detectados"}
+                </div>
+                {rawImportResult.detected.length ? (
+                  <div className="mt-1 text-zinc-700">
+                    {rawImportResult.detected.join(", ")}
+                  </div>
+                ) : null}
+                {rawImportResult.missing.length ? (
+                  <div className="mt-1 space-y-0.5">
+                    {rawImportResult.missing.map((item) => (
+                      <div key={item}>{item}</div>
+                    ))}
+                  </div>
+                ) : null}
+                {rawImportResult.warnings.length ? (
+                  <div className="mt-1 space-y-0.5 text-amber-800">
+                    {rawImportResult.warnings.map((item) => (
+                      <div key={item}>{item}</div>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+          </section>
+
+          <section className="space-y-3 border-t border-zinc-200 py-4">
+            <div className="flex items-center gap-2 text-sm font-semibold">
+              <Database size={16} />
+              Producto
+            </div>
+            <Field label="SKU">
+              <input
+                value={product.sku}
+                onChange={(event) => updateProduct({ sku: event.target.value })}
+                className={[
+                  "w-full rounded border px-2 py-1.5 text-sm",
+                  product.sku.trim()
+                    ? "border-zinc-300"
+                    : "border-red-300 bg-red-50 text-red-900"
+                ].join(" ")}
+              />
+            </Field>
+            <Field label="Nombre base">
+              <input
+                value={product.name}
+                onChange={(event) => updateProduct({ name: event.target.value })}
+                className={[
+                  "w-full rounded border px-2 py-1.5 text-sm",
+                  product.name.trim()
+                    ? "border-zinc-300"
+                    : "border-red-300 bg-red-50 text-red-900"
+                ].join(" ")}
+              />
+            </Field>
+            <div className="grid grid-cols-2 gap-2">
+              <Field label="GTIN opcional">
+                <input
+                  value={product.gtin ?? ""}
+                  placeholder="Vacio si no aplica"
+                  onChange={(event) =>
+                    updateProduct({ gtin: event.target.value || undefined })
+                  }
+                  className="w-full rounded border border-zinc-300 px-2 py-1.5 text-sm"
+                />
+              </Field>
+              <Field label="Peso neto">
+                <input
+                  value={product.netWeight ?? ""}
+                  onChange={(event) =>
+                    updateProduct({ netWeight: event.target.value })
+                  }
+                  className="w-full rounded border border-zinc-300 px-2 py-1.5 text-sm"
+                />
+              </Field>
+            </div>
+            <Field label="Estatus">
+              <input
+                value={getProductMetadata(product, "status")}
+                onChange={(event) =>
+                  updateProductMetadata("status", event.target.value)
+                }
+                className="w-full rounded border border-zinc-300 bg-white px-2 py-1.5 text-sm"
+              />
+            </Field>
+            <Field label="Notas etiqueta">
+              <textarea
+                value={getProductMetadata(product, "notes")}
+                onChange={(event) =>
+                  updateProductMetadata("notes", event.target.value)
+                }
+                className="h-16 w-full resize-none rounded border border-zinc-300 bg-white px-2 py-1.5 text-sm"
+              />
+            </Field>
+            <div>
+              <div className="mb-1 flex items-center justify-between gap-2">
+                <span className="text-xs font-medium text-zinc-600">
+                  Archivos etiqueta
+                </span>
+                <span className="text-[11px] text-zinc-500">
+                  PDF, imagen, .nlbl, .btw
+                </span>
+              </div>
+              <label className="flex min-h-10 cursor-pointer items-center justify-center gap-2 rounded border border-dashed border-zinc-300 bg-white px-3 py-2 text-sm font-semibold hover:border-emerald-700 hover:bg-emerald-50">
+                <Paperclip size={15} />
+                Adjuntar archivos
+                <input
+                  type="file"
+                  multiple
+                  accept={LABEL_ATTACHMENT_ACCEPT}
+                  className="hidden"
+                  onChange={(event) => {
+                    void attachLabelFiles(event.target.files);
+                    event.currentTarget.value = "";
+                  }}
+                />
+              </label>
+              {labelAttachments.length ? (
+                <div className="mt-2 max-h-36 space-y-1 overflow-auto rounded border border-zinc-200 bg-zinc-50 p-2">
+                  {labelAttachments.map((attachment) => (
+                    <div
+                      key={attachment.id}
+                      className="grid grid-cols-[1fr_auto_auto] items-center gap-2 rounded bg-white px-2 py-1 text-xs"
+                    >
+                      <a
+                        href={attachment.dataUrl}
+                        download={attachment.name}
+                        className="min-w-0 truncate font-medium text-zinc-800 hover:text-emerald-800"
+                        title={attachment.name}
+                      >
+                        {attachment.name}
+                      </a>
+                      <span className="text-zinc-500">
+                        {formatBytes(attachment.size)}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => void removeLabelAttachment(attachment.id)}
+                        className="inline-flex h-6 w-6 items-center justify-center rounded text-zinc-500 hover:bg-red-50 hover:text-red-700"
+                        title="Quitar archivo"
+                        aria-label="Quitar archivo"
+                      >
+                        <X size={14} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="mt-2 rounded border border-zinc-200 bg-zinc-50 px-2 py-1.5 text-xs text-zinc-500">
+                  Sin archivos adjuntos.
+                </div>
+              )}
+            </div>
+          </section>
+
+          <section className="space-y-3 border-t border-zinc-200 py-4">
+            <div className="flex items-center gap-2 text-sm font-semibold">
+              <Languages size={16} />
+              Idiomas
+            </div>
+            <div className="grid grid-cols-4 gap-1.5">
+              {SUPPORTED_LANGUAGES.map((language) => (
+                <button
+                  key={language.code}
+                  type="button"
+                  onClick={() => toggleLanguage(language.code)}
+                  className={[
+                    "rounded border px-2 py-1.5 text-xs font-semibold",
+                    languages.includes(language.code)
+                      ? "border-emerald-700 bg-emerald-50 text-emerald-900"
+                      : "border-zinc-300 bg-white text-zinc-600"
+                  ].join(" ")}
+                  title={language.nativeName}
+                >
+                  {language.code}
+                </button>
+              ))}
+            </div>
+            <div className="space-y-1.5">
+              {OFFICIAL_COMBINATIONS.map((combination) => (
+                <button
+                  key={combination.join("-")}
+                  type="button"
+                  onClick={() => {
+                    setLanguages(combination);
+                    setActiveLanguage(combination[0]);
+                  }}
+                  className="mr-1 rounded border border-zinc-300 bg-zinc-50 px-2 py-1 text-xs hover:border-emerald-700"
+                >
+                  {combination.join("-")}
+                </button>
+              ))}
+            </div>
+          </section>
+
+          <section className="space-y-3 border-t border-zinc-200 py-4">
+            <div className="text-sm font-semibold">Etiqueta</div>
+            <div className="grid grid-cols-2 gap-2">
+              <NumberField
+                label="Ancho mm"
+                value={label.widthMm}
+                onChange={(widthMm) =>
+                  setLabel((current) => ({ ...current, widthMm }))
+                }
+              />
+              <NumberField
+                label="Alto mm"
+                value={label.heightMm}
+                onChange={(heightMm) =>
+                  setLabel((current) => ({ ...current, heightMm }))
+                }
+              />
+              <NumberField
+                label="DPI"
+                value={label.dpi}
+                onChange={(dpi) => setLabel((current) => ({ ...current, dpi }))}
+              />
+              <NumberField
+                label="Margen mm"
+                value={label.marginMm}
+                onChange={(marginMm) =>
+                  setLabel((current) => ({ ...current, marginMm }))
+                }
+              />
+            </div>
+            <Field label="Fuente ZPL">
+              <select
+                value={label.fontFamily}
+                onChange={(event) =>
+                  setLabel((current) => ({
+                    ...current,
+                    fontFamily: event.target.value as "zebra" | "arial"
+                  }))
+                }
+                className="w-full rounded border border-zinc-300 px-2 py-1.5 text-sm"
+              >
+                <option value="zebra">Zebra interna</option>
+                <option value="arial">Arial descargada</option>
+              </select>
+            </Field>
+            <Field label="Preset visual">
+              <select
+                value={label.visualPreset}
+                onChange={(event) =>
+                  setLabel((current) => ({
+                    ...current,
+                    visualPreset: event.target
+                      .value as Required<LabelSpec>["visualPreset"]
+                  }))
+                }
+                className="w-full rounded border border-zinc-300 px-2 py-1.5 text-sm"
+              >
+                <option value="crevel-current">Crevel actual</option>
+                <option value="industrial-plain">Industrial plano</option>
+              </select>
+            </Field>
+            {label.fontFamily === "arial" ? (
+              <div className="grid grid-cols-2 gap-2">
+                <Field label="Arial normal">
+                  <input
+                    value={label.zplFontRegular}
+                    onChange={(event) =>
+                      setLabel((current) => ({
+                        ...current,
+                        zplFontRegular: event.target.value
+                      }))
+                    }
+                    className="w-full rounded border border-zinc-300 px-2 py-1.5 text-sm"
+                  />
+                </Field>
+                <Field label="Arial bold">
+                  <input
+                    value={label.zplFontBold}
+                    onChange={(event) =>
+                      setLabel((current) => ({
+                        ...current,
+                        zplFontBold: event.target.value
+                      }))
+                    }
+                    className="w-full rounded border border-zinc-300 px-2 py-1.5 text-sm"
+                  />
+                </Field>
+              </div>
+            ) : null}
+            <div className="grid grid-cols-2 gap-2">
+              <Field label="Ancho tabla %">
+                <input
+                  type="number"
+                  min={48}
+                  max={100}
+                  value={label.nutritionTableWidthPercent}
+                  onChange={(event) =>
+                    setLabel((current) => ({
+                      ...current,
+                      nutritionTableWidthPercent: Number(event.target.value)
+                    }))
+                  }
+                  className="w-full rounded border border-zinc-300 px-2 py-1.5 text-sm"
+                />
+              </Field>
+              <Field label="Nutriente %">
+                <input
+                  type="number"
+                  min={45}
+                  max={72}
+                  value={label.nutritionLabelColumnPercent}
+                  onChange={(event) =>
+                    setLabel((current) => ({
+                      ...current,
+                      nutritionLabelColumnPercent: Number(event.target.value)
+                    }))
+                  }
+                  className="w-full rounded border border-zinc-300 px-2 py-1.5 text-sm"
+                />
+              </Field>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <Field label="Valor %">
+                <input
+                  type="number"
+                  min={18}
+                  max={42}
+                  value={label.nutritionValueColumnPercent}
+                  onChange={(event) =>
+                    setLabel((current) => ({
+                      ...current,
+                      nutritionValueColumnPercent: Number(event.target.value)
+                    }))
+                  }
+                  className="w-full rounded border border-zinc-300 px-2 py-1.5 text-sm"
+                />
+              </Field>
+              <Field label="Escala tabla %">
+                <input
+                  type="number"
+                  min={75}
+                  max={130}
+                  value={label.nutritionTableFontScalePercent}
+                  onChange={(event) =>
+                    setLabel((current) => ({
+                      ...current,
+                      nutritionTableFontScalePercent: Number(event.target.value)
+                    }))
+                  }
+                  className="w-full rounded border border-zinc-300 px-2 py-1.5 text-sm"
+                />
+              </Field>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <Field label="Alto fila mm">
+                <input
+                  type="number"
+                  min={0.2}
+                  max={2}
+                  step={0.05}
+                  value={label.nutritionTableRowPaddingMm}
+                  onChange={(event) =>
+                    setLabel((current) => ({
+                      ...current,
+                      nutritionTableRowPaddingMm: Number(event.target.value)
+                    }))
+                  }
+                  className="w-full rounded border border-zinc-300 px-2 py-1.5 text-sm"
+                />
+              </Field>
+              <Field label="Subir tabla mm">
+                <input
+                  type="number"
+                  min={0}
+                  max={40}
+                  step={0.5}
+                  value={label.nutritionTableBottomOffsetMm}
+                  onChange={(event) =>
+                    setLabel((current) => ({
+                      ...current,
+                      nutritionTableBottomOffsetMm: Number(event.target.value)
+                    }))
+                  }
+                  className="w-full rounded border border-zinc-300 px-2 py-1.5 text-sm"
+                />
+              </Field>
+            </div>
+            <Field label="Alineacion tabla">
+              <select
+                value={label.nutritionTableAlign}
+                onChange={(event) =>
+                  setLabel((current) => ({
+                    ...current,
+                    nutritionTableAlign: event.target.value as Required<LabelSpec>["nutritionTableAlign"]
+                  }))
+                }
+                className="w-full rounded border border-zinc-300 px-2 py-1.5 text-sm"
+              >
+                <option value="right">Derecha</option>
+                <option value="left">Izquierda</option>
+                <option value="center">Centro</option>
+                <option value="full">Completa</option>
+              </select>
+            </Field>
+            <div className="grid grid-cols-2 gap-2 text-sm">
+              <label className="flex min-h-9 items-center gap-2 rounded border border-zinc-300 bg-white px-2">
+                <input
+                  type="checkbox"
+                  checked={label.nutritionShowServing}
+                  onChange={(event) =>
+                    setLabel((current) => ({
+                      ...current,
+                      nutritionShowServing: event.target.checked
+                    }))
+                  }
+                />
+                Porcion
+              </label>
+              <label className="flex min-h-9 items-center gap-2 rounded border border-zinc-300 bg-white px-2">
+                <input
+                  type="checkbox"
+                  checked={label.nutritionShowRiPercent}
+                  onChange={(event) =>
+                    setLabel((current) => ({
+                      ...current,
+                      nutritionShowRiPercent: event.target.checked
+                    }))
+                  }
+                />
+                %RI
+              </label>
+            </div>
+          </section>
+        </aside>
+
+        <section className="flex min-w-0 flex-col p-4">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h2 className="text-base font-semibold">Preview industrial</h2>
+              <p className="text-xs text-zinc-500">
+                {layout.strategy.description} - fuente minima usada{" "}
+                {layout.metrics.usedMinTextHeightMm.toFixed(2)} mm
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <IconButton
+                label="Reducir zoom"
+                onClick={() => setZoom((current) => Math.max(0.35, current - 0.1))}
+              >
+                <Minus size={16} />
+              </IconButton>
+              <span className="w-14 text-center text-sm tabular-nums">
+                {Math.round(zoom * 100)}%
+              </span>
+              <IconButton
+                label="Aumentar zoom"
+                onClick={() => setZoom((current) => Math.min(1.8, current + 0.1))}
+              >
+                <Plus size={16} />
+              </IconButton>
+              <IconButton label="Recalcular" onClick={() => setProduct({ ...product })}>
+                <RefreshCw size={16} />
+              </IconButton>
+            </div>
+          </div>
+
+          {layout.overflow ? (
+            <div className="mb-3 flex items-start gap-2 rounded border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-900">
+              <AlertTriangle className="mt-0.5 shrink-0" size={16} />
+              <span>{layout.warnings.join(" ")}</span>
+            </div>
+          ) : (
+            <div className="mb-3 rounded border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-900">
+              Layout sin overflow, respetando minimo{" "}
+              {label.fontFamily === "arial" ? "Arial 6.2 pt" : "industrial 1.2 mm"}.
+            </div>
+          )}
+
+          <LabelPreview layout={layout} zoom={zoom} />
+        </section>
+
+        <aside className="border-t border-zinc-200 bg-white p-4 xl:border-l xl:border-t-0">
+          <section className="space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2 text-sm font-semibold">
+                <Languages size={16} />
+                Contenido por idioma
+              </div>
+              <select
+                value={activeLanguage}
+                onChange={(event) =>
+                  setActiveLanguage(event.target.value as LanguageCode)
+                }
+                className="rounded border border-zinc-300 px-2 py-1 text-sm"
+              >
+                {SUPPORTED_LANGUAGES.map((language) => (
+                  <option key={language.code} value={language.code}>
+                    {language.code}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <Field label={SECTION_LABELS[activeLanguage].name}>
+              <input
+                value={selectedContent.name ?? ""}
+                onChange={(event) =>
+                  updateLanguageContent(activeLanguage, "name", event.target.value)
+                }
+                className="w-full rounded border border-zinc-300 px-2 py-1.5 text-sm"
+              />
+            </Field>
+            <TextAreaField
+              label={SECTION_LABELS[activeLanguage].ingredients}
+              value={selectedContent.ingredients ?? ""}
+              invalid={languages.includes(activeLanguage) && !selectedContent.ingredients?.trim()}
+              onChange={(value) =>
+                updateLanguageContent(activeLanguage, "ingredients", value)
+              }
+            />
+            <TextAreaField
+              label={SECTION_LABELS[activeLanguage].warnings}
+              value={selectedContent.warnings ?? ""}
+              onChange={(value) =>
+                updateLanguageContent(activeLanguage, "warnings", value)
+              }
+            />
+            <TextAreaField
+              label={SECTION_LABELS[activeLanguage].conservation}
+              value={selectedContent.conservation ?? ""}
+              onChange={(value) =>
+                updateLanguageContent(activeLanguage, "conservation", value)
+              }
+            />
+            <TextAreaField
+              label={SECTION_LABELS[activeLanguage].origin}
+              value={selectedContent.origin ?? ""}
+              onChange={(value) =>
+                updateLanguageContent(activeLanguage, "origin", value)
+              }
+            />
+            <TextAreaField
+              label={SECTION_LABELS[activeLanguage].importer}
+              value={selectedContent.importer ?? ""}
+              onChange={(value) =>
+                updateLanguageContent(activeLanguage, "importer", value)
+              }
+            />
+          </section>
+
+          <section className="mt-5 space-y-3 border-t border-zinc-200 pt-4">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2 text-sm font-semibold">
+                <Table2 size={16} />
+                Nutricional
+              </div>
+              <input
+                value={product.nutrition.servingSize ?? ""}
+                onChange={(event) =>
+                  updateProduct({
+                    nutrition: {
+                      ...product.nutrition,
+                      servingSize: event.target.value
+                    }
+                  })
+                }
+                className="w-28 rounded border border-zinc-300 px-2 py-1 text-xs"
+                placeholder="Porcion"
+              />
+            </div>
+            <div className="grid grid-cols-[1fr_86px_78px] gap-2">
+              <Field label="Base">
+                <input
+                  value={product.nutrition.baseQuantity ?? "100"}
+                  onChange={(event) =>
+                    updateProduct({
+                      nutrition: {
+                        ...product.nutrition,
+                        baseQuantity: event.target.value
+                      }
+                    })
+                  }
+                  className="w-full rounded border border-zinc-300 px-2 py-1.5 text-sm"
+                />
+              </Field>
+              <Field label="Unidad">
+                <select
+                  value={product.nutrition.baseUnit ?? "g"}
+                  onChange={(event) =>
+                    updateProduct({
+                      nutrition: {
+                        ...product.nutrition,
+                        baseUnit: event.target.value as "g" | "ml" | "kg" | "l"
+                      }
+                    })
+                  }
+                  className="w-full rounded border border-zinc-300 px-2 py-1.5 text-sm"
+                >
+                  <option value="g">g</option>
+                  <option value="ml">ml</option>
+                  <option value="kg">kg</option>
+                  <option value="l">l</option>
+                </select>
+              </Field>
+              <Field label="Vista">
+                <div className="rounded border border-zinc-200 bg-zinc-50 px-2 py-1.5 text-sm text-zinc-700">
+                  {nutritionBaseMeasure}
+                </div>
+              </Field>
+            </div>
+
+            <div
+              className="grid border border-zinc-300 bg-zinc-100 text-[11px] font-semibold text-zinc-700"
+              style={{ gridTemplateColumns: nutritionEditorGridTemplate }}
+            >
+              <div className="px-2 py-1">Nutriente {activeLanguage}</div>
+              <div className="border-l border-zinc-300 px-2 py-1 text-right">
+                {nutritionBaseMeasure}
+              </div>
+              {label.nutritionShowServing ? (
+                <div className="border-l border-zinc-300 px-2 py-1 text-right">
+                  Porcion
+                </div>
+              ) : null}
+              {label.nutritionShowRiPercent ? (
+                <div className="border-l border-zinc-300 px-2 py-1 text-right">
+                  %RI
+                </div>
+              ) : null}
+              <div className="border-l border-zinc-300 px-1 py-1" />
+            </div>
+            <div className="max-h-72 overflow-auto border-x border-b border-zinc-300">
+              {product.nutrition.rows.map((row, index) => (
+                <div
+                  key={`${row.id}-${index}`}
+                  className="grid border-b border-zinc-200 last:border-b-0"
+                  style={{ gridTemplateColumns: nutritionEditorGridTemplate }}
+                >
+                  <input
+                    value={row.label[activeLanguage] ?? row.label.EN}
+                    onChange={(event) =>
+                      updateNutritionLabel(index, activeLanguage, event.target.value)
+                    }
+                    className="min-w-0 px-2 py-1.5 text-xs outline-none"
+                  />
+                  <input
+                    value={row.per100g}
+                    onChange={(event) =>
+                      updateNutritionRow(index, { per100g: event.target.value })
+                    }
+                    className={[
+                      "border-l px-2 py-1.5 text-right text-xs outline-none",
+                      row.per100g.trim()
+                        ? "border-zinc-200"
+                        : "border-red-300 bg-red-50 text-red-900"
+                    ].join(" ")}
+                  />
+                  {label.nutritionShowServing ? (
+                    <input
+                      value={row.perServing ?? ""}
+                      onChange={(event) =>
+                        updateNutritionRow(index, { perServing: event.target.value })
+                      }
+                      className="border-l border-zinc-200 px-2 py-1.5 text-right text-xs outline-none"
+                    />
+                  ) : null}
+                  {label.nutritionShowRiPercent ? (
+                    <input
+                      value={row.riPercent ?? ""}
+                      onChange={(event) =>
+                        updateNutritionRow(index, { riPercent: event.target.value })
+                      }
+                      className="border-l border-zinc-200 px-2 py-1.5 text-right text-xs outline-none"
+                    />
+                  ) : null}
+                  <button
+                    type="button"
+                    onClick={() => removeNutritionRow(index)}
+                    className="flex items-center justify-center border-l border-zinc-200 text-zinc-500 hover:bg-red-50 hover:text-red-700"
+                    title="Quitar nutriente"
+                    aria-label="Quitar nutriente"
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                </div>
+              ))}
+            </div>
+            <div className="grid grid-cols-[1fr_96px] gap-2">
+              <select
+                value={selectedNutrient}
+                onChange={(event) => setSelectedNutrient(event.target.value)}
+                className="min-w-0 rounded border border-zinc-300 px-2 py-1.5 text-sm"
+              >
+                {NUTRIENT_CATALOG.map((nutrient) => (
+                  <option key={nutrient.id} value={nutrient.id}>
+                    {nutrient.label[activeLanguage] ?? nutrient.label.EN}
+                  </option>
+                ))}
+              </select>
+              <ActionButton onClick={addNutritionRow} icon={<Plus size={16} />}>
+                Anadir
+              </ActionButton>
+            </div>
+          </section>
+
+          <section className="mt-5 space-y-3 border-t border-zinc-200 pt-4">
+            <div className="grid grid-cols-2 gap-2">
+              <ActionButton onClick={saveProduct} icon={<Save size={16} />}>
+                Guardar
+              </ActionButton>
+              <ActionButton
+                onClick={() => exportFromApi("zpl")}
+                icon={<Printer size={16} />}
+              >
+                ZPL
+              </ActionButton>
+              <ActionButton
+                onClick={() => exportFromApi("btxml")}
+                icon={<FileCode2 size={16} />}
+              >
+                BTXML
+              </ActionButton>
+              <ActionButton
+                onClick={printTestLabel}
+                icon={<Send size={16} />}
+              >
+                Imprimir
+              </ActionButton>
+            </div>
+
+            <textarea
+              value={exportText}
+              onChange={(event) => setExportText(event.target.value)}
+              className="h-44 w-full resize-none rounded border border-zinc-300 bg-zinc-950 p-3 font-mono text-xs text-zinc-50"
+              placeholder="Las exportaciones y respuestas de impresion apareceran aqui."
+            />
+          </section>
+        </aside>
+      </div>
+    </main>
+  );
+}
+
+function Field({
+  label,
+  children
+}: {
+  label: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <label className="block">
+      <span className="mb-1 block text-xs font-medium text-zinc-600">{label}</span>
+      {children}
+    </label>
+  );
+}
+
+function NumberField({
+  label,
+  value,
+  onChange
+}: {
+  label: string;
+  value: number;
+  onChange: (value: number) => void;
+}) {
+  return (
+    <Field label={label}>
+      <input
+        type="number"
+        value={value}
+        onChange={(event) => onChange(Number(event.target.value))}
+        className="w-full rounded border border-zinc-300 px-2 py-1.5 text-sm"
+      />
+    </Field>
+  );
+}
+
+function TextAreaField({
+  label,
+  value,
+  invalid,
+  onChange
+}: {
+  label: string;
+  value: string;
+  invalid?: boolean;
+  onChange: (value: string) => void;
+}) {
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  function toggleBold() {
+    const textarea = textareaRef.current;
+
+    if (!textarea) {
+      onChange(`**${value}**`);
+      return;
+    }
+
+    const start = textarea.selectionStart;
+    const end = textarea.selectionEnd;
+    const selected = value.slice(start, end);
+    const before = value.slice(0, start);
+    const after = value.slice(end);
+    const next = selected
+      ? `${before}**${selected}**${after}`
+      : `${before}****${after}`;
+
+    onChange(next);
+
+    requestAnimationFrame(() => {
+      textarea.focus();
+      if (selected) {
+        textarea.setSelectionRange(start + 2, end + 2);
+      } else {
+        textarea.setSelectionRange(start + 2, start + 2);
+      }
+    });
+  }
+
+  return (
+    <Field label={label}>
+      <div
+        className={[
+          "overflow-hidden rounded border bg-white",
+          invalid ? "border-red-300" : "border-zinc-300"
+        ].join(" ")}
+      >
+        <div className="flex items-center justify-end border-b border-zinc-200 bg-zinc-50 px-1 py-1">
+          <button
+            type="button"
+            onClick={toggleBold}
+            className="inline-flex h-7 w-7 items-center justify-center rounded text-zinc-700 hover:bg-white hover:text-emerald-800"
+            title="Negrita"
+            aria-label="Negrita"
+          >
+            <Bold size={15} />
+          </button>
+        </div>
+        <textarea
+          ref={textareaRef}
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+          className={[
+            "h-20 w-full resize-none px-2 py-1.5 text-sm outline-none",
+            invalid ? "bg-red-50 text-red-900" : ""
+          ].join(" ")}
+        />
+      </div>
+    </Field>
+  );
+}
+
+function IconButton({
+  label,
+  children,
+  onClick
+}: {
+  label: string;
+  children: React.ReactNode;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="inline-flex h-8 w-8 items-center justify-center rounded border border-zinc-300 bg-white text-zinc-800 hover:border-emerald-700"
+      title={label}
+      aria-label={label}
+    >
+      {children}
+    </button>
+  );
+}
+
+function ActionButton({
+  children,
+  icon,
+  onClick
+}: {
+  children: React.ReactNode;
+  icon: React.ReactNode;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="inline-flex min-h-9 items-center justify-center gap-2 rounded border border-zinc-300 bg-white px-3 py-2 text-sm font-semibold hover:border-emerald-700 hover:bg-emerald-50"
+    >
+      {icon}
+      {children}
+    </button>
+  );
+}
+
+function upsertLocalProduct(
+  products: ProductRecord[],
+  product: ProductRecord
+): ProductRecord[] {
+  const normalizedProduct = withDefaultProductMetadata(product);
+  const exists = products.some((item) => item.sku === normalizedProduct.sku);
+
+  if (!exists) {
+    return [...products, normalizedProduct].sort((left, right) =>
+      left.sku.localeCompare(right.sku)
+    );
+  }
+
+  return products.map((item) =>
+    item.sku === normalizedProduct.sku ? normalizedProduct : item
+  );
+}
+
+function cleanProduct(product: ProductRecord): ProductRecord {
+  const normalized = withDefaultProductMetadata(product);
+
+  return {
+    ...normalized,
+    gtin: normalized.gtin?.trim() || undefined
+  };
+}
+
+const IMPORT_FIELD_ALIASES: Record<string, string[]> = {
+  sku: ["sku", "codigo", "codigo producto", "producto"],
+  language: ["language", "idioma", "lang"],
+  section: ["section", "seccion", "sección", "campo"],
+  value: ["value", "valor", "contenido", "texto"],
+  per100g: ["per100g", "100g", "por100g", "por 100g", "por 100 g"],
+  perServing: ["perServing", "portion", "porcion", "porción", "serving"],
+  riPercent: ["riPercent", "ri", "%ri", "% ri", "ir", "%ir"],
+  name: ["name", "nombre", "nombre base"],
+  gtin: ["gtin", "ean", "barcode", "codigo barras", "código barras"],
+  brand: ["brand", "marca"],
+  netWeight: ["netWeight", "net weight", "peso neto", "neto"],
+  countryOfOrigin: ["countryOfOrigin", "pais origen", "país origen", "origen"],
+  status: ["status", "estatus", "estado"],
+  notes: ["notes", "note", "notas", "nota", "notas etiqueta"],
+  files: ["files", "file", "archivos", "archivo", "archivos etiqueta"]
+};
+
+const METADATA_ALIASES: Record<"status" | "notes" | "files", string[]> = {
+  status: ["status", "estatus", "estado"],
+  notes: ["notes", "note", "notas", "nota", "labelNotes", "label_notes"],
+  files: ["files", "file", "archivos", "archivo", "labelFiles", "label_files"]
+};
+
+function withDefaultProductMetadata(product: ProductRecord): ProductRecord {
+  return {
+    ...product,
+    metadata: {
+      ...product.metadata,
+      status: getProductMetadata(product, "status"),
+      attachments: getLabelAttachments(product)
+    }
+  };
+}
+
+function getProductMetadata(
+  product: ProductRecord,
+  field: "status" | "notes" | "files"
+): string {
+  const metadata = product.metadata ?? {};
+  const aliases = METADATA_ALIASES[field];
+
+  for (const key of aliases) {
+    const value = metadata[key];
+
+    if (Array.isArray(value)) {
+      continue;
+    }
+
+    if (value !== undefined && value !== null) {
+      return String(value);
+    }
+  }
+
+  return "";
+}
+
+function setProductMetadata(
+  product: ProductRecord,
+  field: "status" | "notes" | "files",
+  value: string
+): ProductRecord {
+  return withDefaultProductMetadata({
+    ...product,
+    metadata: {
+      ...product.metadata,
+      [field]: value
+    }
+  });
+}
+
+function getLabelAttachments(product: ProductRecord): LabelAttachment[] {
+  const metadata = product.metadata ?? {};
+  const candidates = [metadata.attachments, metadata.labelAttachments];
+  const attachments = candidates.find(Array.isArray) ?? [];
+
+  return attachments.filter(isLabelAttachment);
+}
+
+function setLabelAttachments(
+  product: ProductRecord,
+  attachments: LabelAttachment[]
+): ProductRecord {
+  return withDefaultProductMetadata({
+    ...product,
+    metadata: {
+      ...product.metadata,
+      attachments
+    }
+  });
+}
+
+function isLabelAttachment(value: unknown): value is LabelAttachment {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const attachment = value as Partial<LabelAttachment>;
+
+  return Boolean(
+    attachment.id &&
+      attachment.name &&
+      attachment.dataUrl &&
+      typeof attachment.size === "number"
+  );
+}
+
+function isAllowedLabelAttachment(file: File): boolean {
+  const extension = file.name.split(".").pop()?.toLowerCase();
+
+  return (
+    ["pdf", "nlbl", "btw", "png", "jpg", "jpeg", "webp", "gif"].includes(
+      extension ?? ""
+    ) ||
+    ["application/pdf", "image/png", "image/jpeg", "image/webp", "image/gif"].includes(
+      file.type
+    )
+  );
+}
+
+async function fileToLabelAttachment(file: File): Promise<LabelAttachment> {
+  return {
+    id: createAttachmentId(file),
+    name: file.name,
+    mimeType: file.type || "application/octet-stream",
+    size: file.size,
+    lastModified: file.lastModified,
+    uploadedAt: new Date().toISOString(),
+    dataUrl: await readFileAsDataUrl(file)
+  };
+}
+
+function readFileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result ?? ""));
+    reader.onerror = () => reject(reader.error ?? new Error("File read failed"));
+    reader.readAsDataURL(file);
+  });
+}
+
+function createAttachmentId(file: File): string {
+  const safeName = file.name.replace(/[^a-z0-9.]+/gi, "-").toLowerCase();
+  return `${Date.now().toString(36)}-${file.lastModified.toString(36)}-${safeName}`;
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) {
+    return `${bytes} B`;
+  }
+
+  if (bytes < 1024 * 1024) {
+    return `${(bytes / 1024).toFixed(1)} KB`;
+  }
+
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function createImportedProductBase(sku: string, source: ProductRecord): ProductRecord {
+  return withDefaultProductMetadata({
+    ...source,
+    sku,
+    name: sku,
+    gtin: undefined,
+    brand: undefined,
+    netWeight: undefined,
+    languages: {},
+    nutrition: {
+      ...source.nutrition,
+      servingSize: "",
+      rows: source.nutrition.rows.map((row) => ({
+        ...row,
+        per100g: "",
+        perServing: "",
+        riPercent: ""
+      }))
+    },
+    metadata: {
+      status: "",
+      notes: "",
+      files: "",
+      attachments: []
+    }
+  });
+}
+
+function preserveManualImportMetadata(
+  existing: ProductRecord,
+  imported: ProductRecord,
+  row: Record<string, string>
+): ProductRecord {
+  return (["status", "notes", "files"] as const).reduce((current, field) => {
+    const incoming = readImportField(row, field);
+
+    if (hasImportValue(incoming)) {
+      return setProductMetadata(current, field, incoming);
+    }
+
+    return setProductMetadata(current, field, getProductMetadata(existing, field));
+  }, withDefaultProductMetadata(imported));
+}
+
+type RawSectionKey =
+  | "ingredients"
+  | "warnings"
+  | "conservation"
+  | "origin"
+  | "importer";
+
+type RawParsedLabel = RawImportResult & {
+  product: ProductRecord;
+  languages: LanguageCode[];
+};
+
+const RAW_SECTION_KEYS: RawSectionKey[] = [
+  "ingredients",
+  "warnings",
+  "conservation",
+  "origin",
+  "importer"
+];
+
+const RAW_DEFAULT_NUTRIENT_IDS = [
+  "energy",
+  "fat",
+  "saturates",
+  "carbohydrate",
+  "sugars",
+  "protein",
+  "salt"
+];
+
+const RAW_SECTION_ALIASES: Record<RawSectionKey, string[]> = {
+  ingredients: [
+    "Zutaten",
+    "Ingredientes",
+    "Ingredients",
+    "Ingrédients",
+    "Ingredienten",
+    "Ingrediënten",
+    "Ingredienti"
+  ],
+  warnings: [
+    "Warnhinweise",
+    "Advertencias",
+    "Warnings",
+    "Avertissements",
+    "Waarschuwingen",
+    "Vorsicht",
+    "Aviso"
+  ],
+  conservation: [
+    "Aufbewahrung",
+    "Conservación",
+    "Conservacion",
+    "Conservation",
+    "Storage",
+    "Bewaren",
+    "Kühl und trocken lagern",
+    "Almacenar"
+  ],
+  origin: [
+    "Herkunft",
+    "Origen",
+    "Pais de origen",
+    "País de origen",
+    "Country of origin",
+    "Origine"
+  ],
+  importer: [
+    "Importiert von",
+    "Importado por",
+    "Importer",
+    "Imported by",
+    "Importateur"
+  ]
+};
+
+function parseRawLabelText(
+  text: string,
+  source: ProductRecord,
+  fallbackLanguages: LanguageCode[]
+): RawParsedLabel {
+  const detected: string[] = [];
+  const warnings: string[] = [];
+  const normalizedText = normalizeRawText(text);
+  const next = createRawDetectionBase(source);
+
+  if (!normalizedText) {
+    return {
+      product: next,
+      languages: fallbackLanguages.length ? fallbackLanguages : (["ES"] as LanguageCode[]),
+      detected,
+      missing: ["Raw text vacio"],
+      warnings
+    };
+  }
+
+  const sku = matchRawValue(normalizedText, /\bSKU[:#]?\s*([A-Z0-9._-]+)/i);
+  const gtin = matchRawValue(normalizedText, /\b(?:GTIN|EAN)[:#]?\s*(\d{8,14})\b/i);
+  const netWeight = extractRawNetWeight(normalizedText);
+  const title = extractRawTitle(normalizedText);
+
+  if (sku) {
+    next.sku = sku;
+    detected.push(`SKU ${sku}`);
+  }
+
+  if (gtin) {
+    next.gtin = gtin;
+    detected.push(`GTIN ${gtin}`);
+  }
+
+  if (netWeight) {
+    next.netWeight = netWeight;
+    detected.push(`peso ${netWeight}`);
+  }
+
+  const rawBaseMeasure = extractRawBaseMeasure(normalizedText);
+  const rawServingSize = extractRawServingSize(normalizedText);
+
+  if (rawBaseMeasure) {
+    next.nutrition.baseQuantity = rawBaseMeasure.quantity;
+    next.nutrition.baseUnit = rawBaseMeasure.unit;
+    detected.push(`base ${rawBaseMeasure.quantity} ${rawBaseMeasure.unit}`);
+  }
+
+  if (rawServingSize) {
+    next.nutrition.servingSize = rawServingSize;
+    detected.push(`porcion ${rawServingSize}`);
+  }
+
+  if (title) {
+    next.name = title;
+    detected.push("titulo");
+  }
+
+  const languageSegments = extractRawLanguageSegments(normalizedText);
+  const detectedLanguages = uniqueLanguages(
+    languageSegments.map((segment) => segment.language)
+  );
+  const resultLanguages: LanguageCode[] = detectedLanguages.length
+    ? detectedLanguages
+    : fallbackLanguages.length
+      ? fallbackLanguages
+      : ["ES"];
+
+  if (detectedLanguages.length) {
+    detected.push(`idiomas ${detectedLanguages.join("-")}`);
+  } else {
+    warnings.push("No se encontraron marcadores de idioma como (DE) o (ES).");
+  }
+
+  for (const segment of languageSegments) {
+    const cleanSegment = removeKnownTitle(removeNutritionTail(segment.text), title);
+    const sections = parseRawLanguageSections(cleanSegment, segment.language);
+    const currentContent = next.languages[segment.language] ?? {};
+    const languageContent: ProductLanguageContent = {
+      ...currentContent,
+      name: title || currentContent.name || next.name
+    };
+
+    for (const key of RAW_SECTION_KEYS) {
+      const value = sections[key];
+
+      if (value) {
+        languageContent[key] = mergeDetectedText(languageContent[key], value);
+        detected.push(`${segment.language} ${key}`);
+      }
+    }
+
+    if (!Object.values(sections).some(Boolean) && cleanSegment) {
+      languageContent.ingredients = mergeDetectedText(
+        languageContent.ingredients,
+        cleanSegment
+      );
+      detected.push(`${segment.language} texto`);
+    }
+
+    next.languages[segment.language] = languageContent;
+  }
+
+  next.nutrition = {
+    ...next.nutrition,
+    rows: applyRawNutritionValues(normalizedText, resultLanguages, detected)
+  };
+
+  const missing = getProductValidationIssues(next, resultLanguages);
+
+  return {
+    product: cleanProduct(next),
+    languages: resultLanguages,
+    detected: [...new Set(detected)],
+    missing,
+    warnings
+  };
+}
+
+function createRawDetectionBase(product: ProductRecord): ProductRecord {
+  return withDefaultProductMetadata({
+    ...product,
+    name: "",
+    gtin: undefined,
+    netWeight: undefined,
+    countryOfOrigin: undefined,
+    languages: {},
+    nutrition: {
+      ...product.nutrition,
+      servingSize: "",
+      baseQuantity: product.nutrition.baseQuantity || "100",
+      baseUnit: product.nutrition.baseUnit || "g",
+      rows: []
+    }
+  });
+}
+
+function normalizeRawText(text: string): string {
+  return text
+    .replace(/\r\n?/g, "\n")
+    .replace(/[ \t]+/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function matchRawValue(text: string, pattern: RegExp): string {
+  return text.match(pattern)?.[1]?.trim() ?? "";
+}
+
+function extractRawNetWeight(text: string): string {
+  const match =
+    text.match(/\b(?:NET|Peso neto|Contenido neto)[:\s-]*(\d+(?:[.,]\d+)?)\s*(g|kg|ml|l)\s*e?\b/i) ??
+    text.match(/[-–]\s*(\d+(?:[.,]\d+)?)\s*(g|kg|ml|l)\s*e?\b/i) ??
+    text.match(/\b(\d+(?:[.,]\d+)?)\s*(g|kg|ml|l)\s*e\b/i);
+
+  return match ? `${match[1]} ${match[2]}` : "";
+}
+
+function extractRawBaseMeasure(
+  text: string
+): { quantity: string; unit: "g" | "ml" | "kg" | "l" } | null {
+  const match = text.match(
+    /\b(?:por|per|je|pour|voor)\s*(\d+(?:[.,]\d+)?)\s*(g|kg|ml|l)\b/i
+  );
+
+  if (!match || !isNutritionUnit(match[2])) {
+    return null;
+  }
+
+  return {
+    quantity: match[1],
+    unit: match[2].toLowerCase() as "g" | "ml" | "kg" | "l"
+  };
+}
+
+function extractRawServingSize(text: string): string {
+  const matches = [
+    ...text.matchAll(/\b(?:per|por)\s*(\d+(?:[.,]\d+)?)\s*(g|kg|ml|l)\b/gi)
+  ];
+  const match = matches.find((candidate) => candidate[1] !== "100");
+
+  if (!match) {
+    return "";
+  }
+
+  return `Per ${match[1]} ${match[2].toLowerCase()}`;
+}
+
+function isNutritionUnit(value: string): value is "g" | "ml" | "kg" | "l" {
+  return ["g", "ml", "kg", "l"].includes(value.toLowerCase());
+}
+
+function extractRawTitle(text: string): string {
+  const firstLanguageMarker = findFirstLanguageMarkerIndex(text);
+  const headerText =
+    firstLanguageMarker >= 0 ? text.slice(0, firstLanguageMarker) : text;
+  const lines = headerText
+    .split("\n")
+    .map((line) => cleanRawBody(line))
+    .filter(Boolean)
+    .filter((line) => !/\b(?:SKU|GTIN|EAN|CR\d+)\b/i.test(line));
+  const title = lines.join(" ").replace(/\s{2,}/g, " ").trim();
+
+  return title.length > 180 ? title.slice(0, 180).trim() : title;
+}
+
+function findFirstLanguageMarkerIndex(text: string): number {
+  const markerPattern = /\(([A-Z]{2})\)/g;
+  let match: RegExpExecArray | null;
+
+  while ((match = markerPattern.exec(text))) {
+    if (isSupportedLanguageCode(match[1])) {
+      return match.index;
+    }
+  }
+
+  return -1;
+}
+
+function extractRawLanguageSegments(text: string): Array<{
+  language: LanguageCode;
+  text: string;
+}> {
+  const markers: Array<{ language: LanguageCode; start: number; end: number }> = [];
+  const markerPattern = /\(([A-Z]{2})\)/g;
+  let match: RegExpExecArray | null;
+
+  while ((match = markerPattern.exec(text))) {
+    if (isSupportedLanguageCode(match[1])) {
+      markers.push({
+        language: match[1],
+        start: match.index,
+        end: match.index + match[0].length
+      });
+    }
+  }
+
+  return markers.map((marker, index) => {
+    const nextMarker = markers[index + 1];
+    return {
+      language: marker.language,
+      text: text.slice(marker.end, nextMarker?.start ?? text.length).trim()
+    };
+  });
+}
+
+function parseRawLanguageSections(
+  segment: string,
+  language: LanguageCode
+): Partial<Record<RawSectionKey, string>> {
+  const matches = findRawSectionMarkers(segment, language);
+
+  if (!matches.length) {
+    return {};
+  }
+
+  const sections: Partial<Record<RawSectionKey, string>> = {};
+
+  matches.forEach((match, index) => {
+    const nextMatch = matches[index + 1];
+    const body = cleanRawBody(
+      segment.slice(match.end, nextMatch?.start ?? segment.length)
+    );
+
+    if (body) {
+      sections[match.key] = mergeDetectedText(sections[match.key], body);
+    }
+  });
+
+  return sections;
+}
+
+function findRawSectionMarkers(
+  segment: string,
+  language: LanguageCode
+): Array<{ key: RawSectionKey; start: number; end: number }> {
+  const matches: Array<{ key: RawSectionKey; start: number; end: number }> = [];
+
+  for (const key of RAW_SECTION_KEYS) {
+    for (const alias of rawSectionAliases(language, key)) {
+      const aliasPattern = escapeRegExp(alias).replace(/\\ /g, "\\s+");
+      const pattern = new RegExp(`(^|[\\s/])${aliasPattern}\\s*[:.]`, "giu");
+      let match: RegExpExecArray | null;
+
+      while ((match = pattern.exec(segment))) {
+        const leading = match[1]?.length ?? 0;
+        matches.push({
+          key,
+          start: match.index + leading,
+          end: match.index + match[0].length
+        });
+      }
+    }
+  }
+
+  return matches
+    .sort((left, right) => left.start - right.start)
+    .filter(
+      (match, index, all) =>
+        index === 0 || match.start > all[index - 1].start + 2
+    );
+}
+
+function rawSectionAliases(
+  language: LanguageCode,
+  key: RawSectionKey
+): string[] {
+  return [
+    SECTION_LABELS[language][key],
+    ...RAW_SECTION_ALIASES[key]
+  ].filter(Boolean);
+}
+
+function removeNutritionTail(text: string): string {
+  const marker = text.search(
+    /(?:Nährwert|Naehrwert|Información nutricional|Informacion nutricional|Nutrition|Valeurs|Voedingswaarde)/i
+  );
+
+  return marker >= 0 ? text.slice(0, marker).trim() : text;
+}
+
+function removeKnownTitle(text: string, title: string): string {
+  if (!title) {
+    return text;
+  }
+
+  const normalizedTitle = normalizeComparable(title);
+  const escapedTitle = escapeRegExp(title);
+
+  return text
+    .split("\n")
+    .filter((line) => normalizeComparable(line) !== normalizedTitle)
+    .join("\n")
+    .replace(new RegExp(`^${escapedTitle}\\s*`, "i"), "")
+    .replace(new RegExp(`\\s+${escapedTitle}\\s+`, "gi"), " ")
+    .trim();
+}
+
+function applyRawNutritionValues(
+  text: string,
+  languages: LanguageCode[],
+  detected: string[]
+): NutritionRow[] {
+  const lines = text
+    .split("\n")
+    .map((line) => cleanRawBody(line))
+    .filter(Boolean);
+  const detectedIds = new Set<string>();
+
+  for (const row of NUTRIENT_CATALOG) {
+    const line = lines.find((candidate) =>
+      nutrientAliases(row, languages).some((alias) =>
+        containsComparableTerm(candidate, alias)
+      )
+    );
+
+    if (line && extractRawNutritionNumbers(line).length) {
+      detectedIds.add(row.id);
+    }
+  }
+
+  const rowIds = detectedIds.size ? [...detectedIds] : RAW_DEFAULT_NUTRIENT_IDS;
+  const rows = NUTRIENT_CATALOG.filter((item) => rowIds.includes(item.id)).map(
+    (item) => ({
+      id: item.id,
+      label: item.label,
+      per100g: "",
+      perServing: "",
+      riPercent: "",
+      indent: item.indent
+    })
+  );
+
+  return rows.map((row) => {
+    const line = lines.find((candidate) =>
+      nutrientAliases(row, languages).some((alias) =>
+        containsComparableTerm(candidate, alias)
+      )
+    );
+
+    if (!line) {
+      return row;
+    }
+
+    const values = extractRawNutritionNumbers(line);
+
+    if (!values.length) {
+      return row;
+    }
+
+    detected.push(`nutricion ${row.id}`);
+
+    if (row.id === "energy" && values.length >= 4) {
+      return {
+        ...row,
+        per100g: `${values[0]} / ${values[1]}`,
+        perServing: `${values[2]} / ${values[3]}`,
+        riPercent: values[4] ?? row.riPercent
+      };
+    }
+
+    if (row.id === "energy" && values.length >= 2) {
+      return {
+        ...row,
+        per100g: `${values[0]} / ${values[1]}`,
+        perServing: values[2] ?? row.perServing,
+        riPercent: values[3] ?? row.riPercent
+      };
+    }
+
+    return {
+      ...row,
+      per100g: values[0] ?? row.per100g,
+      perServing: values[1] ?? row.perServing,
+      riPercent: values[2] ?? row.riPercent
+    };
+  });
+}
+
+function nutrientAliases(
+  row: Pick<NutritionRow, "id" | "label">,
+  languages: LanguageCode[]
+): string[] {
+  return [
+    ...languages.map((language) => row.label[language] ?? ""),
+    row.label.EN,
+    row.id.replace(/_/g, " ")
+  ].filter(Boolean);
+}
+
+function extractRawNutritionNumbers(line: string): string[] {
+  return (
+    line.match(/\d+(?:[.,]\d+)?\s*(?:kJ|kcal|g|mg|µg|ug|%)/gi) ?? []
+  ).map((value) => value.replace(/\s+/g, " ").trim());
+}
+
+function getProductValidationIssues(
+  product: ProductRecord,
+  selectedLanguages: LanguageCode[]
+): string[] {
+  const issues: string[] = [];
+
+  if (!product.sku.trim()) {
+    issues.push("Falta SKU");
+  }
+
+  if (!product.name.trim()) {
+    issues.push("Falta titulo/nombre base");
+  }
+
+  selectedLanguages.forEach((language) => {
+    const content = product.languages[language];
+
+    if (!content) {
+      issues.push(`Falta contenido ${language}`);
+      return;
+    }
+
+    if (!content.ingredients?.trim()) {
+      issues.push(`Faltan ingredientes ${language}`);
+    }
+  });
+
+  if (!product.nutrition.rows.length) {
+    issues.push("Falta tabla nutricional");
+  }
+
+  product.nutrition.rows.forEach((row) => {
+    if (!row.per100g.trim()) {
+      issues.push(`Falta valor nutricional: ${row.label.EN}`);
+    }
+  });
+
+  return issues;
+}
+
+function uniqueLanguages(languages: LanguageCode[]): LanguageCode[] {
+  return [...new Set(languages)];
+}
+
+function isSupportedLanguageCode(value: string): value is LanguageCode {
+  return SUPPORTED_LANGUAGES.some((language) => language.code === value);
+}
+
+function containsComparableTerm(text: string, term: string): boolean {
+  const normalizedText = normalizeComparable(text);
+  const normalizedTerm = normalizeComparable(term);
+
+  if (!normalizedTerm) {
+    return false;
+  }
+
+  return normalizedText.includes(normalizedTerm);
+}
+
+function normalizeComparable(value: string): string {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9%µ]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function mergeDetectedText(existing: string | undefined, incoming: string): string {
+  const cleanIncoming = applyAutoBoldUppercase(cleanRawBody(incoming));
+
+  if (!cleanIncoming) {
+    return existing ?? "";
+  }
+
+  if (!existing?.trim()) {
+    return cleanIncoming;
+  }
+
+  if (normalizeComparable(existing).includes(normalizeComparable(cleanIncoming))) {
+    return existing;
+  }
+
+  return `${existing.trim()} ${cleanIncoming}`;
+}
+
+function applyAutoBoldUppercase(value: string): string {
+  return value.replace(
+    /\b((?:[A-ZÁÉÍÓÚÜÑ]{2,}|\([A-ZÁÉÍÓÚÜÑ]{2,}\))(?:[\s/,-]+(?:[A-ZÁÉÍÓÚÜÑ]{2,}|\([A-ZÁÉÍÓÚÜÑ]{2,}\)))*)\b/g,
+    (match) => {
+      const letters = match.replace(/[^A-ZÁÉÍÓÚÜÑ]/g, "");
+
+      if (letters.length < 3) {
+        return match;
+      }
+
+      return `**${match}**`;
+    }
+  );
+}
+
+function cleanRawBody(value: string): string {
+  return value
+    .replace(/\s+/g, " ")
+    .replace(/\s+([,.;:])/g, "$1")
+    .replace(/^[/\s:.-]+/, "")
+    .trim();
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function parseDelimited(text: string): string[][] {
+  const delimiter = text.includes("\t") ? "\t" : ",";
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let cell = "";
+  let quoted = false;
+
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    const next = text[index + 1];
+
+    if (char === '"' && quoted && next === '"') {
+      cell += '"';
+      index += 1;
+      continue;
+    }
+
+    if (char === '"') {
+      quoted = !quoted;
+      continue;
+    }
+
+    if (!quoted && char === delimiter) {
+      row.push(cell);
+      cell = "";
+      continue;
+    }
+
+    if (!quoted && (char === "\n" || char === "\r")) {
+      if (char === "\r" && next === "\n") {
+        index += 1;
+      }
+      row.push(cell);
+      if (row.some((value) => value.trim())) {
+        rows.push(row);
+      }
+      row = [];
+      cell = "";
+      continue;
+    }
+
+    cell += char;
+  }
+
+  row.push(cell);
+  if (row.some((value) => value.trim())) {
+    rows.push(row);
+  }
+
+  return rows;
+}
+
+function readImportField(row: Record<string, string>, field: string): string {
+  const aliases = IMPORT_FIELD_ALIASES[field] ?? [field];
+  const normalizedAliases = new Set(aliases.map(normalizeImportKey));
+
+  for (const [key, value] of Object.entries(row)) {
+    if (normalizedAliases.has(normalizeImportKey(key))) {
+      return value ?? "";
+    }
+  }
+
+  return "";
+}
+
+function normalizeImportKey(value: string): string {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9%]/g, "");
+}
+
+function canonicalImportSection(section: string): string {
+  const normalized = normalizeImportKey(section);
+
+  for (const [field, aliases] of Object.entries(IMPORT_FIELD_ALIASES)) {
+    if (aliases.map(normalizeImportKey).includes(normalized)) {
+      return field;
+    }
+  }
+
+  return section;
+}
+
+function canonicalMetadataSection(
+  section: string
+): "status" | "notes" | "files" | undefined {
+  const normalized = normalizeImportKey(section);
+
+  for (const [field, aliases] of Object.entries(METADATA_ALIASES)) {
+    if (aliases.map(normalizeImportKey).includes(normalized)) {
+      return field as "status" | "notes" | "files";
+    }
+  }
+
+  return undefined;
+}
+
+function hasImportValue(value: string | undefined): value is string {
+  return Boolean(value?.trim());
+}
+
+function applyImportRow(
+  product: ProductRecord,
+  row: Record<string, string>
+): ProductRecord {
+  const sku = readImportField(row, "sku").trim() || product.sku;
+  const language = readImportField(row, "language")
+    .trim()
+    .toUpperCase() as LanguageCode | "";
+  const section = readImportField(row, "section").trim();
+  const canonicalSection = section.startsWith("nutrition.")
+    ? section
+    : canonicalImportSection(section);
+  const value = readImportField(row, "value");
+
+  if (!section) {
+    return applyWideImportRow({
+      ...product,
+      sku
+    }, row);
+  }
+
+  let next: ProductRecord = {
+    ...product,
+    sku
+  };
+
+  const metadataSection = canonicalMetadataSection(canonicalSection);
+
+  if (!language && metadataSection) {
+    if (!hasImportValue(value)) {
+      return next;
+    }
+
+    return setProductMetadata(next, metadataSection, value);
+  }
+
+  if (
+    !language &&
+    ["name", "gtin", "brand", "netWeight", "countryOfOrigin"].includes(
+      canonicalSection
+    )
+  ) {
+    if (!hasImportValue(value)) {
+      return next;
+    }
+
+    next = {
+      ...next,
+      [canonicalSection]: value || undefined
+    };
+    return cleanProduct(next);
+  }
+
+  if (canonicalSection.startsWith("nutrition.")) {
+    const id = canonicalSection.replace("nutrition.", "");
+
+    if (id === "baseQuantity" || id === "baseUnit") {
+      if (!hasImportValue(value)) {
+        return next;
+      }
+
+      return {
+        ...next,
+        nutrition: {
+          ...next.nutrition,
+          [id]: value
+        }
+      };
+    }
+
+    const rows = [...next.nutrition.rows];
+    const existingIndex = rows.findIndex((nutritionRow) => nutritionRow.id === id);
+    const catalogItem = NUTRIENT_CATALOG.find((item) => item.id === id);
+    const baseRow: NutritionRow = {
+      id,
+      label: catalogItem?.label ?? { EN: value || id },
+      per100g: readImportField(row, "per100g"),
+      perServing: readImportField(row, "perServing"),
+      riPercent: readImportField(row, "riPercent"),
+      indent: catalogItem?.indent
+    };
+    const targetIndex = existingIndex >= 0 ? existingIndex : rows.length;
+    const currentRow = rows[targetIndex] ?? baseRow;
+    const per100g = readImportField(row, "per100g");
+    const perServing = readImportField(row, "perServing");
+    const riPercent = readImportField(row, "riPercent");
+
+    rows[targetIndex] = {
+      ...currentRow,
+      label: language && hasImportValue(value)
+        ? {
+            ...currentRow.label,
+            [language]: value || currentRow.label[language] || currentRow.label.EN
+          }
+        : currentRow.label,
+      per100g: per100g || currentRow.per100g,
+      perServing: perServing || currentRow.perServing,
+      riPercent: riPercent || currentRow.riPercent
+    };
+
+    return {
+      ...next,
+      nutrition: {
+        ...next.nutrition,
+        rows
+      }
+    };
+  }
+
+  if (language && isEditableLanguageSection(canonicalSection)) {
+    if (!hasImportValue(value)) {
+      return next;
+    }
+
+    return {
+      ...next,
+      languages: {
+        ...next.languages,
+        [language]: {
+          ...next.languages[language],
+          [canonicalSection]: value
+        }
+      }
+    };
+  }
+
+  return next;
+}
+
+function applyWideImportRow(
+  product: ProductRecord,
+  row: Record<string, string>
+): ProductRecord {
+  let next = withDefaultProductMetadata(product);
+  const simpleFields = [
+    "name",
+    "gtin",
+    "brand",
+    "netWeight",
+    "countryOfOrigin"
+  ] as const;
+
+  simpleFields.forEach((field) => {
+    const value = readImportField(row, field);
+
+    if (hasImportValue(value)) {
+      next = {
+        ...next,
+        [field]: value
+      };
+    }
+  });
+
+  (["status", "notes", "files"] as const).forEach((field) => {
+    const value = readImportField(row, field);
+
+    if (hasImportValue(value)) {
+      next = setProductMetadata(next, field, value);
+    }
+  });
+
+  return cleanProduct(next);
+}
+
+function isEditableLanguageSection(section: string): section is
+  | "name"
+  | "ingredients"
+  | "warnings"
+  | "conservation"
+  | "origin"
+  | "importer" {
+  return [
+    "name",
+    "ingredients",
+    "warnings",
+    "conservation",
+    "origin",
+    "importer"
+  ].includes(section);
+}

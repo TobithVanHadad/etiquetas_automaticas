@@ -1,0 +1,11 @@
+node_modules
+.next
+dist
+data
+*.log
+*.err
+label-platform-preview.png
+.env
+.env.local
+coverage
+*.tsbuildinfo

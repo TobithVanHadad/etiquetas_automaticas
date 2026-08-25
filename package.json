@@ -1,0 +1,25 @@
+{
+  "name": "industrial-label-platform",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "npm run build -w @industrial-label/core && npm run build -w @industrial-label/api && npm run build -w @industrial-label/web",
+    "dev": "npm run build -w @industrial-label/core && concurrently -n api,web -c cyan,green \"npm run dev -w @industrial-label/api\" \"npm run dev -w @industrial-label/web\"",
+    "dev:api": "npm run dev -w @industrial-label/api",
+    "dev:web": "npm run dev -w @industrial-label/web",
+    "lint": "npm run lint -w @industrial-label/web",
+    "typecheck": "npm run typecheck -w @industrial-label/core && npm run typecheck -w @industrial-label/api && npm run typecheck -w @industrial-label/web"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2",
+    "typescript": "^5.4.5"
+  }
+}
