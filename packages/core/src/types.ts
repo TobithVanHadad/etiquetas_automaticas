@@ -79,7 +79,8 @@ export type ProductMetadataValue =
   | number
   | boolean
   | null
-  | LabelAttachment[];
+  | LabelAttachment[]
+  | Record<string, unknown>;
 
 export interface ProductRecord {
   sku: string;

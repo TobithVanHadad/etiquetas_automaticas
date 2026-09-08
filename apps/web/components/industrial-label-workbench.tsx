@@ -23,6 +23,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   composeLabel,
   generateZpl,
+  mmToDots,
   NUTRIENT_CATALOG,
   OFFICIAL_COMBINATIONS,
   sampleProduct,
@@ -38,11 +39,28 @@ import {
 import { LabelPreview } from "./label-preview";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
-const DEFAULT_PRINTER = "ZDesigner ZT610-203dpi ZPL";
 const LABEL_ATTACHMENT_ACCEPT =
   ".pdf,.nlbl,.btw,image/png,image/jpeg,image/webp,image/gif";
 const MAX_LABEL_ATTACHMENT_BYTES = 15 * 1024 * 1024;
 const MAX_LABEL_ATTACHMENTS_TOTAL_BYTES = 45 * 1024 * 1024;
+const PRINTER_PROFILES = [
+  {
+    id: "zt610-203",
+    label: "ZT610 203 DPI",
+    printerName: "ZDesigner ZT610-203dpi ZPL",
+    dpi: 203
+  },
+  {
+    id: "zt610-300",
+    label: "ZT610 300 DPI",
+    printerName: "ZDesigner ZT610-300dpi ZPL",
+    dpi: 300
+  }
+] as const;
+const DEFAULT_PRINTER_PROFILE_ID = "zt610-203";
+
+type PrinterProfileId = (typeof PRINTER_PROFILES)[number]["id"];
+type PrinterProfile = (typeof PRINTER_PROFILES)[number];
 
 type WorkbenchNotice = {
   tone: "success" | "error" | "info";
@@ -100,6 +118,12 @@ export function IndustrialLabelWorkbench() {
     "checking"
   );
   const [selectedNutrient, setSelectedNutrient] = useState("vitamin_d");
+  const [printerProfileId, setPrinterProfileId] = useState<PrinterProfileId>(
+    DEFAULT_PRINTER_PROFILE_ID
+  );
+  const selectedPrinterProfile =
+    PRINTER_PROFILES.find((profile) => profile.id === printerProfileId) ??
+    PRINTER_PROFILES[0];
 
   useEffect(() => {
     fetch(`${API_URL}/products`)
@@ -109,6 +133,7 @@ export function IndustrialLabelWorkbench() {
           const hydratedProducts = payload.products.map(withDefaultProductMetadata);
           setProducts(hydratedProducts);
           setProduct(hydratedProducts[0]);
+          applySavedLabelSettings(hydratedProducts[0]);
         }
         setApiStatus("online");
       })
@@ -137,12 +162,36 @@ export function IndustrialLabelWorkbench() {
     () => getProductValidationIssues(product, languages),
     [product, languages]
   );
+  const previewDots = useMemo(
+    () => ({
+      width: mmToDots(label.widthMm, label.dpi),
+      height: mmToDots(label.heightMm, label.dpi)
+    }),
+    [label.widthMm, label.heightMm, label.dpi]
+  );
 
   function updateProduct(next: Partial<ProductRecord>) {
     setProduct((current) => ({
       ...current,
       ...next
     }));
+  }
+
+  function applySavedLabelSettings(productToApply: ProductRecord) {
+    const saved = readProductLabelSettings(productToApply);
+
+    if (saved.label) {
+      setLabel((current) => ({
+        ...current,
+        ...saved.label
+      }));
+    }
+
+    if (saved.printerProfileId) {
+      setPrinterProfileId(saved.printerProfileId);
+    } else if (saved.label?.dpi) {
+      setPrinterProfileId(getPrinterProfileIdForDpi(saved.label.dpi));
+    }
   }
 
   function updateProductMetadata(field: "status" | "notes" | "files", value: string) {
@@ -194,7 +243,11 @@ export function IndustrialLabelWorkbench() {
       const response = await fetch(`${API_URL}/products`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(cleanProduct(productToSave))
+        body: JSON.stringify(
+          cleanProduct(
+            withProductLabelSettings(productToSave, label, selectedPrinterProfile)
+          )
+        )
       });
 
       if (!response.ok) {
@@ -216,6 +269,24 @@ export function IndustrialLabelWorkbench() {
       });
       throw error;
     }
+  }
+
+  async function persistProductsBatch(productsToSave: ProductRecord[]) {
+    for (const item of productsToSave) {
+      const response = await fetch(`${API_URL}/products`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(
+          cleanProduct(withProductLabelSettings(item, label, selectedPrinterProfile))
+        )
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+    }
+
+    setApiStatus("online");
   }
 
   async function saveProduct() {
@@ -242,7 +313,7 @@ export function IndustrialLabelWorkbench() {
 
   async function printTestLabel() {
     const confirmed = window.confirm(
-      `Enviar una etiqueta de prueba a ${DEFAULT_PRINTER}?`
+      `Enviar una etiqueta de prueba a ${selectedPrinterProfile.printerName}?`
     );
 
     if (!confirmed) {
@@ -257,7 +328,7 @@ export function IndustrialLabelWorkbench() {
           product: cleanProduct(product),
           languages,
           label,
-          printer: { name: DEFAULT_PRINTER },
+          printer: { name: selectedPrinterProfile.printerName },
           dryRun: false
         })
       });
@@ -473,10 +544,19 @@ export function IndustrialLabelWorkbench() {
 
       setProduct(selectedProduct);
       setProducts(importedProducts);
-      setNotice({
-        tone: "success",
-        message: `Datos importados: ${rows.length - 1} fila(s). Los archivos y notas existentes se conservaron.`
-      });
+      try {
+        await persistProductsBatch(importedProducts);
+        setNotice({
+          tone: "success",
+          message: `Datos importados y guardados: ${rows.length - 1} fila(s). Los archivos y notas existentes se conservaron.`
+        });
+      } catch (error) {
+        setApiStatus("offline");
+        setNotice({
+          tone: "error",
+          message: `Datos importados localmente, pero no se pudieron guardar en el servidor: ${String(error)}`
+        });
+      }
     } catch (error) {
       setNotice({
         tone: "error",
@@ -485,7 +565,7 @@ export function IndustrialLabelWorkbench() {
     }
   }
 
-  function applyRawText() {
+  async function applyRawText(saveAfterDetect = false) {
     const result = parseRawLabelText(rawText, product, languages);
     setRawImportResult({
       detected: result.detected,
@@ -517,6 +597,10 @@ export function IndustrialLabelWorkbench() {
         ? "Texto detectado con campos faltantes marcados en rojo."
         : "Texto detectado y etiqueta generada."
     });
+
+    if (saveAfterDetect && !result.missing.length) {
+      await persistProduct(nextProduct, "Texto detectado y producto guardado.");
+    }
   }
 
   return (
@@ -528,7 +612,9 @@ export function IndustrialLabelWorkbench() {
               <h1 className="text-lg font-semibold tracking-normal">
                 Motor de etiquetas
               </h1>
-              <p className="text-xs text-zinc-500">Zebra ZT610 - 203 DPI</p>
+              <p className="text-xs text-zinc-500">
+                {selectedPrinterProfile.label}
+              </p>
             </div>
             <span
               className={[
@@ -583,7 +669,9 @@ export function IndustrialLabelWorkbench() {
               onChange={(event) => {
                 const next = products.find((item) => item.sku === event.target.value);
                 if (next) {
-                  setProduct(withDefaultProductMetadata(next));
+                  const hydrated = withDefaultProductMetadata(next);
+                  setProduct(hydrated);
+                  applySavedLabelSettings(hydrated);
                 }
               }}
               className="w-full rounded border border-zinc-300 px-2 py-1.5 text-sm"
@@ -628,9 +716,15 @@ export function IndustrialLabelWorkbench() {
               className="h-36 w-full resize-none rounded border border-zinc-300 bg-white px-2 py-1.5 font-mono text-xs outline-none"
               placeholder="Pegue aqui el texto crudo de una etiqueta."
             />
-            <div className="grid grid-cols-2 gap-2">
-              <ActionButton onClick={applyRawText} icon={<RefreshCw size={16} />}>
+            <div className="grid grid-cols-3 gap-2">
+              <ActionButton onClick={() => void applyRawText()} icon={<RefreshCw size={16} />}>
                 Detectar
+              </ActionButton>
+              <ActionButton
+                onClick={() => void applyRawText(true)}
+                icon={<Save size={16} />}
+              >
+                Guardar
               </ActionButton>
               <ActionButton
                 onClick={() => {
@@ -865,11 +959,29 @@ export function IndustrialLabelWorkbench() {
                   setLabel((current) => ({ ...current, heightMm }))
                 }
               />
-              <NumberField
-                label="DPI"
-                value={label.dpi}
-                onChange={(dpi) => setLabel((current) => ({ ...current, dpi }))}
-              />
+              <Field label="Perfil Zebra">
+                <select
+                  value={printerProfileId}
+                  onChange={(event) => {
+                    const nextProfile =
+                      PRINTER_PROFILES.find(
+                        (profile) => profile.id === event.target.value
+                      ) ?? PRINTER_PROFILES[0];
+                    setPrinterProfileId(nextProfile.id);
+                    setLabel((current) => ({
+                      ...current,
+                      dpi: nextProfile.dpi
+                    }));
+                  }}
+                  className="w-full rounded border border-zinc-300 px-2 py-1.5 text-sm"
+                >
+                  {PRINTER_PROFILES.map((profile) => (
+                    <option key={profile.id} value={profile.id}>
+                      {profile.label}
+                    </option>
+                  ))}
+                </select>
+              </Field>
               <NumberField
                 label="Margen mm"
                 value={label.marginMm}
@@ -1089,7 +1201,8 @@ export function IndustrialLabelWorkbench() {
               <h2 className="text-base font-semibold">Preview industrial</h2>
               <p className="text-xs text-zinc-500">
                 {layout.strategy.description} - fuente minima usada{" "}
-                {layout.metrics.usedMinTextHeightMm.toFixed(2)} mm
+                {layout.metrics.usedMinTextHeightMm.toFixed(2)} mm -{" "}
+                {previewDots.width} x {previewDots.height} dots @ {label.dpi} DPI
               </p>
             </div>
             <div className="flex items-center gap-2">
@@ -1572,6 +1685,141 @@ function cleanProduct(product: ProductRecord): ProductRecord {
   };
 }
 
+function withProductLabelSettings(
+  product: ProductRecord,
+  label: Required<LabelSpec>,
+  printerProfile: PrinterProfile
+): ProductRecord {
+  return withDefaultProductMetadata({
+    ...product,
+    metadata: {
+      ...product.metadata,
+      labelSpec: serializeLabelSpec(label),
+      printerProfile: {
+        id: printerProfile.id,
+        name: printerProfile.printerName,
+        dpi: printerProfile.dpi
+      }
+    }
+  });
+}
+
+function serializeLabelSpec(label: Required<LabelSpec>): Record<string, unknown> {
+  return {
+    widthMm: label.widthMm,
+    heightMm: label.heightMm,
+    dpi: label.dpi,
+    marginMm: label.marginMm,
+    fontFamily: label.fontFamily,
+    zplFontRegular: label.zplFontRegular,
+    zplFontBold: label.zplFontBold,
+    visualPreset: label.visualPreset,
+    nutritionTableWidthPercent: label.nutritionTableWidthPercent,
+    nutritionTableAlign: label.nutritionTableAlign,
+    nutritionValueColumnPercent: label.nutritionValueColumnPercent,
+    nutritionLabelColumnPercent: label.nutritionLabelColumnPercent,
+    nutritionTableBottomOffsetMm: label.nutritionTableBottomOffsetMm,
+    nutritionTableRowPaddingMm: label.nutritionTableRowPaddingMm,
+    nutritionTableFontScalePercent: label.nutritionTableFontScalePercent,
+    nutritionShowServing: label.nutritionShowServing,
+    nutritionShowRiPercent: label.nutritionShowRiPercent
+  };
+}
+
+function readProductLabelSettings(product: ProductRecord): {
+  label: Partial<LabelSpec> | null;
+  printerProfileId: PrinterProfileId | null;
+} {
+  const metadata = product.metadata ?? {};
+  const labelSpec = isObjectRecord(metadata.labelSpec)
+    ? metadata.labelSpec
+    : isObjectRecord(metadata.label)
+      ? metadata.label
+      : null;
+  const printerProfile = isObjectRecord(metadata.printerProfile)
+    ? metadata.printerProfile
+    : null;
+
+  return {
+    label: labelSpec ? parseSavedLabelSpec(labelSpec) : null,
+    printerProfileId: normalizePrinterProfileId(
+      typeof printerProfile?.id === "string" ? printerProfile.id : undefined
+    )
+  };
+}
+
+function parseSavedLabelSpec(value: Record<string, unknown>): Partial<LabelSpec> {
+  const label: Partial<LabelSpec> = {};
+
+  if (typeof value.widthMm === "number") label.widthMm = value.widthMm;
+  if (typeof value.heightMm === "number") label.heightMm = value.heightMm;
+  if (typeof value.dpi === "number") label.dpi = value.dpi;
+  if (typeof value.marginMm === "number") label.marginMm = value.marginMm;
+  if (value.fontFamily === "zebra" || value.fontFamily === "arial") {
+    label.fontFamily = value.fontFamily;
+  }
+  if (typeof value.zplFontRegular === "string") {
+    label.zplFontRegular = value.zplFontRegular;
+  }
+  if (typeof value.zplFontBold === "string") {
+    label.zplFontBold = value.zplFontBold;
+  }
+  if (
+    value.visualPreset === "crevel-current" ||
+    value.visualPreset === "industrial-plain"
+  ) {
+    label.visualPreset = value.visualPreset;
+  }
+  if (typeof value.nutritionTableWidthPercent === "number") {
+    label.nutritionTableWidthPercent = value.nutritionTableWidthPercent;
+  }
+  if (
+    value.nutritionTableAlign === "left" ||
+    value.nutritionTableAlign === "center" ||
+    value.nutritionTableAlign === "right" ||
+    value.nutritionTableAlign === "full"
+  ) {
+    label.nutritionTableAlign = value.nutritionTableAlign;
+  }
+  if (typeof value.nutritionValueColumnPercent === "number") {
+    label.nutritionValueColumnPercent = value.nutritionValueColumnPercent;
+  }
+  if (typeof value.nutritionLabelColumnPercent === "number") {
+    label.nutritionLabelColumnPercent = value.nutritionLabelColumnPercent;
+  }
+  if (typeof value.nutritionTableBottomOffsetMm === "number") {
+    label.nutritionTableBottomOffsetMm = value.nutritionTableBottomOffsetMm;
+  }
+  if (typeof value.nutritionTableRowPaddingMm === "number") {
+    label.nutritionTableRowPaddingMm = value.nutritionTableRowPaddingMm;
+  }
+  if (typeof value.nutritionTableFontScalePercent === "number") {
+    label.nutritionTableFontScalePercent = value.nutritionTableFontScalePercent;
+  }
+  if (typeof value.nutritionShowServing === "boolean") {
+    label.nutritionShowServing = value.nutritionShowServing;
+  }
+  if (typeof value.nutritionShowRiPercent === "boolean") {
+    label.nutritionShowRiPercent = value.nutritionShowRiPercent;
+  }
+
+  return label;
+}
+
+function normalizePrinterProfileId(value?: string): PrinterProfileId | null {
+  return PRINTER_PROFILES.some((profile) => profile.id === value)
+    ? (value as PrinterProfileId)
+    : null;
+}
+
+function getPrinterProfileIdForDpi(dpi: number): PrinterProfileId {
+  return dpi === 300 ? "zt610-300" : "zt610-203";
+}
+
+function isObjectRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
 const IMPORT_FIELD_ALIASES: Record<string, string[]> = {
   sku: ["sku", "codigo", "codigo producto", "producto"],
   language: ["language", "idioma", "lang"],
@@ -1909,20 +2157,36 @@ function parseRawLabelText(
     detected.push("titulo");
   }
 
-  const languageSegments = extractRawLanguageSegments(normalizedText);
+  const explicitLanguageSegments = extractRawLanguageSegments(normalizedText);
+  const inferredLanguages = explicitLanguageSegments.length
+    ? []
+    : inferRawLanguages(normalizedText);
+  const languageSegments = explicitLanguageSegments.length
+    ? explicitLanguageSegments
+    : createInferredRawSegments(
+        normalizedText,
+        title,
+        inferredLanguages,
+        fallbackLanguages
+      );
   const detectedLanguages = uniqueLanguages(
     languageSegments.map((segment) => segment.language)
   );
   const resultLanguages: LanguageCode[] = detectedLanguages.length
     ? detectedLanguages
-    : fallbackLanguages.length
-      ? fallbackLanguages
-      : ["ES"];
+    : ["ES"];
 
-  if (detectedLanguages.length) {
+  if (explicitLanguageSegments.length) {
     detected.push(`idiomas ${detectedLanguages.join("-")}`);
+  } else if (inferredLanguages.length) {
+    detected.push(`idioma probable ${inferredLanguages[0]}`);
+    warnings.push(
+      `No se encontraron marcadores (DE)/(ES); el texto se asigno a ${inferredLanguages[0]} por deteccion.`
+    );
   } else {
-    warnings.push("No se encontraron marcadores de idioma como (DE) o (ES).");
+    warnings.push(
+      "No se encontraron marcadores de idioma como (DE) o (ES); se uso el idioma activo."
+    );
   }
 
   for (const segment of languageSegments) {
@@ -2045,16 +2309,52 @@ function isNutritionUnit(value: string): value is "g" | "ml" | "kg" | "l" {
 
 function extractRawTitle(text: string): string {
   const firstLanguageMarker = findFirstLanguageMarkerIndex(text);
-  const headerText =
-    firstLanguageMarker >= 0 ? text.slice(0, firstLanguageMarker) : text;
+  const nutritionMarker = findNutritionMarkerIndex(text);
+  const firstContentMarker = Math.min(
+    ...[firstLanguageMarker, nutritionMarker].filter((index) => index >= 0)
+  );
+  const headerText = Number.isFinite(firstContentMarker)
+    ? text.slice(0, firstContentMarker)
+    : text;
   const lines = headerText
     .split("\n")
+    .map((line) => stripRawHeaderMetadata(line))
     .map((line) => cleanRawBody(line))
     .filter(Boolean)
-    .filter((line) => !/\b(?:SKU|GTIN|EAN|CR\d+)\b/i.test(line));
+    .filter(isRawTitleCandidate);
   const title = lines.join(" ").replace(/\s{2,}/g, " ").trim();
 
-  return title.length > 180 ? title.slice(0, 180).trim() : title;
+  return trimRawTitle(title);
+}
+
+function stripRawHeaderMetadata(line: string): string {
+  return line
+    .replace(/\bSKU[:#]?\s*[A-Z0-9._-]+/gi, " ")
+    .replace(/\b(?:GTIN|EAN)[:#]?\s*\d{8,14}\b/gi, " ")
+    .replace(/\bCR\s*\d+\b/gi, " ")
+    .replace(/\bCR\d+\b/gi, " ")
+    .replace(/\b(?:NET|Peso neto|Contenido neto)[:\s-]*\d+(?:[.,]\d+)?\s*(?:g|kg|ml|l)\s*e?\b/gi, " ");
+}
+
+function isRawTitleCandidate(line: string): boolean {
+  const comparable = normalizeComparable(line);
+  const letters = line.replace(/[^A-Za-zÁÉÍÓÚÜÑáéíóúüñ]/g, "");
+
+  return (
+    letters.length >= 3 &&
+    !/^(?:sku|gtin|ean|cr)\b/i.test(comparable) &&
+    !/(?:zutaten|ingredientes|ingredients|nutrition|nahrwert|nährwert)/i.test(
+      comparable
+    )
+  );
+}
+
+function trimRawTitle(title: string): string {
+  const compact = cleanRawBody(title)
+    .replace(/\s+([,.;:])/g, "$1")
+    .replace(/\s{2,}/g, " ");
+
+  return compact.length > 220 ? compact.slice(0, 220).trim() : compact;
 }
 
 function findFirstLanguageMarkerIndex(text: string): number {
@@ -2068,6 +2368,14 @@ function findFirstLanguageMarkerIndex(text: string): number {
   }
 
   return -1;
+}
+
+function findNutritionMarkerIndex(text: string): number {
+  const marker = text.search(
+    /(?:Nährwert|Naehrwert|Información nutricional|Informacion nutricional|Nutrition|Valeurs|Voedingswaarde|Valores por|Werte je)/i
+  );
+
+  return marker >= 0 ? marker : -1;
 }
 
 function extractRawLanguageSegments(text: string): Array<{
@@ -2095,6 +2403,55 @@ function extractRawLanguageSegments(text: string): Array<{
       text: text.slice(marker.end, nextMarker?.start ?? text.length).trim()
     };
   });
+}
+
+function createInferredRawSegments(
+  text: string,
+  title: string,
+  inferredLanguages: LanguageCode[],
+  fallbackLanguages: LanguageCode[]
+): Array<{ language: LanguageCode; text: string }> {
+  const language =
+    inferredLanguages[0] ?? fallbackLanguages[0] ?? ("ES" as LanguageCode);
+  const body = removeKnownTitle(removeNutritionTail(text), title);
+
+  return [
+    {
+      language,
+      text: body || text
+    }
+  ];
+}
+
+function inferRawLanguages(text: string): LanguageCode[] {
+  const scores = SUPPORTED_LANGUAGES.map((language) => {
+    let score = 0;
+
+    for (const key of RAW_SECTION_KEYS) {
+      const sectionLabel = SECTION_LABELS[language.code][key];
+
+      if (sectionLabel && containsComparableTerm(text, sectionLabel)) {
+        score += 3;
+      }
+    }
+
+    for (const nutrient of NUTRIENT_CATALOG) {
+      const label = nutrient.label[language.code];
+
+      if (label && containsComparableTerm(text, label)) {
+        score += 1;
+      }
+    }
+
+    return {
+      language: language.code,
+      score
+    };
+  })
+    .filter((result) => result.score >= 3)
+    .sort((left, right) => right.score - left.score);
+
+  return scores.slice(0, 5).map((result) => result.language);
 }
 
 function parseRawLanguageSections(
@@ -2182,7 +2539,15 @@ function removeKnownTitle(text: string, title: string): string {
 
   return text
     .split("\n")
-    .filter((line) => normalizeComparable(line) !== normalizedTitle)
+    .filter((line) => {
+      const comparableLine = normalizeComparable(stripRawHeaderMetadata(line));
+
+      return (
+        comparableLine !== normalizedTitle &&
+        !normalizedTitle.includes(comparableLine) &&
+        !comparableLine.includes(normalizedTitle)
+      );
+    })
     .join("\n")
     .replace(new RegExp(`^${escapedTitle}\\s*`, "i"), "")
     .replace(new RegExp(`\\s+${escapedTitle}\\s+`, "gi"), " ")

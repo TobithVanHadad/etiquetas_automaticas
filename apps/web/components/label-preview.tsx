@@ -44,7 +44,11 @@ export function LabelPreview({
           }}
         >
           {layout.elements.map((element) => (
-            <PreviewElement key={element.id} element={element} />
+            <PreviewElement
+              key={element.id}
+              element={element}
+              fontFamily={layout.label.fontFamily}
+            />
           ))}
         </div>
       </div>
@@ -52,7 +56,13 @@ export function LabelPreview({
   );
 }
 
-function PreviewElement({ element }: { element: LayoutElement }) {
+function PreviewElement({
+  element,
+  fontFamily
+}: {
+  element: LayoutElement;
+  fontFamily: LayoutResult["label"]["fontFamily"];
+}) {
   const baseStyle = {
     left: element.xMm * CSS_PX_PER_MM,
     top: element.yMm * CSS_PX_PER_MM,
@@ -72,6 +82,7 @@ function PreviewElement({ element }: { element: LayoutElement }) {
           fontSize: element.fontMm * CSS_PX_PER_MM,
           lineHeight: element.lineHeight,
           fontWeight: element.weight === "bold" ? 700 : 400,
+          fontFamily: previewFontFamily(fontFamily),
           textAlign: element.align ?? "left",
           overflow: "hidden"
         }}
@@ -150,10 +161,16 @@ function PreviewElement({ element }: { element: LayoutElement }) {
     );
   }
 
-  return <TablePreview table={element} />;
+  return <TablePreview table={element} fontFamily={fontFamily} />;
 }
 
-function TablePreview({ table }: { table: TableElement }) {
+function TablePreview({
+  table,
+  fontFamily
+}: {
+  table: TableElement;
+  fontFamily: LayoutResult["label"]["fontFamily"];
+}) {
   const rowHeights = table.rowHeightsMm ?? table.cells.map(() => table.rowHeightMm);
 
   return (
@@ -167,7 +184,8 @@ function TablePreview({ table }: { table: TableElement }) {
         top: table.yMm * CSS_PX_PER_MM,
         width: table.widthMm * CSS_PX_PER_MM,
         height: table.heightMm * CSS_PX_PER_MM,
-        fontSize: Math.max(5, table.fontMm * CSS_PX_PER_MM)
+        fontSize: Math.max(5, table.fontMm * CSS_PX_PER_MM),
+        fontFamily: previewFontFamily(fontFamily)
       }}
     >
       {table.cells.map((row, rowIndex) => (
@@ -208,6 +226,14 @@ function TablePreview({ table }: { table: TableElement }) {
       ))}
     </div>
   );
+}
+
+function previewFontFamily(fontFamily: LayoutResult["label"]["fontFamily"]): string {
+  if (fontFamily === "arial") {
+    return "Arial, Helvetica, sans-serif";
+  }
+
+  return "'Arial Narrow', 'Roboto Condensed', Arial, sans-serif";
 }
 
 function RichTextInline({ text }: { text: string }) {

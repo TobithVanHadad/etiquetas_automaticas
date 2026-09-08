@@ -44,6 +44,8 @@ API: `http://localhost:4000`
 - Los GTIN son opcionales y no se imprimen si el campo queda vacio.
 - El minimo en Arial se bloquea en `6.2 pt`; Zebra interna conserva el minimo industrial equivalente configurado por el motor.
 - Las columnas nutricionales de porcion y `%RI` solo se imprimen cuando se activan explicitamente.
+- Los perfiles de impresora soportados en la UI son `Zebra ZT610 203 DPI` y `Zebra ZT610 300 DPI`; el ZPL recalcula dots fisicos segun el DPI activo.
+- La configuracion visual de etiqueta se guarda en `metadata.labelSpec` junto al producto para conservar margen, tamano, DPI y ajustes de tabla.
 
 ## Direccion local-first
 
@@ -115,9 +117,9 @@ El panel `Raw text` permite pegar texto crudo de una etiqueta. El MVP detecta:
 - secciones principales como ingredientes, advertencias, conservacion, origen e importador
 - valores nutricionales cuando encuentra filas reconocibles
 
-Al detectar texto crudo, el producto se regenera desde ese contenido para no arrastrar datos viejos del ejemplo. Las vitaminas y minerales solo aparecen si estan en el texto detectado o si se agregan manualmente desde el catalogo nutricional. Las frases en mayusculas detectadas en el cuerpo se guardan con marcador de negrita.
+Al detectar texto crudo, el producto se regenera desde ese contenido para no arrastrar datos viejos del ejemplo. Si no existen marcadores explicitos como `(DE)` o `(ES)`, el MVP infiere el idioma mas probable desde vocabulario de secciones y terminos nutricionales. Las vitaminas y minerales solo aparecen si estan en el texto detectado o si se agregan manualmente desde el catalogo nutricional. Las frases en mayusculas detectadas en el cuerpo se guardan con marcador de negrita.
 
-Los faltantes aparecen en rojo. El usuario puede completar, agregar o quitar filas desde el panel nutricional.
+Los faltantes aparecen en rojo. El usuario puede completar, agregar o quitar filas desde el panel nutricional. El boton `Guardar` del panel Raw detecta y persiste el producto en el catalogo/API cuando no hay faltantes.
 
 ## Archivos de etiqueta
 
@@ -131,7 +133,10 @@ Limites del MVP:
 
 ## Impresion de prueba
 
-La impresora detectada en este equipo es `ZDesigner ZT610-203dpi ZPL`.
+Perfiles de impresora previstos:
+
+- `ZDesigner ZT610-203dpi ZPL`
+- `ZDesigner ZT610-300dpi ZPL`
 
 La UI incluye `Imprimir`, que pide confirmacion antes de enviar ZPL RAW a Windows. Para una prueba sin papel, el endpoint acepta `dryRun: true` y devuelve el ZPL sin mandarlo al spooler.
 
@@ -150,7 +155,7 @@ Variable requerida en el servicio Web:
 NEXT_PUBLIC_API_URL=https://TU-DOMINIO-DE-API.up.railway.app
 ```
 
-El servicio API usa `PORT` de Railway automaticamente. Despues se puede apuntar un subdominio de Cloudflare al dominio publico de Railway con un `CNAME`, sin tunel.
+El servicio API usa `PORT` de Railway automaticamente. El repo incluye `.nvmrc` con Node 24 y `apps/web/.env.example`. Despues se puede apuntar un subdominio de Cloudflare al dominio publico de Railway con un `CNAME`, sin tunel.
 
 ## Nota industrial
 
