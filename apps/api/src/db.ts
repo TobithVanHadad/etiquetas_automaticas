@@ -17,7 +17,7 @@ type SqliteDatabase = {
 };
 
 const workspaceRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
-const dataDir = join(workspaceRoot, "data");
+const dataDir = process.env.DATA_DIR || join(workspaceRoot, "data");
 const dbPath = join(dataDir, "labels.db");
 
 mkdirSync(dataDir, { recursive: true });

@@ -155,6 +155,12 @@ Variable requerida en el servicio Web:
 NEXT_PUBLIC_API_URL=https://TU-DOMINIO-DE-API.up.railway.app
 ```
 
+Variable recomendada en el servicio API si se monta volumen persistente:
+
+```bash
+DATA_DIR=/data
+```
+
 El servicio API usa `PORT` de Railway automaticamente. El repo incluye `.nvmrc` con Node 24 y `apps/web/.env.example`. Despues se puede apuntar un subdominio de Cloudflare al dominio publico de Railway con un `CNAME`, sin tunel.
 
 ## Nota industrial
