@@ -18,7 +18,7 @@
     "dev:api": "npm run dev -w @industrial-label/api",
     "dev:web": "npm run dev -w @industrial-label/web",
     "lint": "npm run lint -w @industrial-label/web",
-    "start": "npm run start:web",
+    "start": "node scripts/start-railway.mjs",
     "start:api": "npm run start -w @industrial-label/api",
     "start:web": "npm run start -w @industrial-label/web",
     "typecheck": "npm run typecheck -w @industrial-label/core && npm run typecheck -w @industrial-label/api && npm run typecheck -w @industrial-label/web"

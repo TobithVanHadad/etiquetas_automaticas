@@ -152,12 +152,14 @@ Este repo es un monorepo npm compartido. En Railway se recomienda crear dos serv
 Variable requerida en el servicio Web:
 
 ```bash
+SERVICE_ROLE=web
 NEXT_PUBLIC_API_URL=https://TU-DOMINIO-DE-API.up.railway.app
 ```
 
-Variable recomendada en el servicio API si se monta volumen persistente:
+Variables requeridas/recomendadas en el servicio API:
 
 ```bash
+SERVICE_ROLE=api
 DATA_DIR=/data
 ```
 
