@@ -102,7 +102,7 @@ export interface LabelSpec {
   fontFamily?: "zebra" | "arial";
   zplFontRegular?: string;
   zplFontBold?: string;
-  visualPreset?: "crevel-current" | "industrial-plain";
+  visualPreset?: "crevel-current" | "industrial-plain" | "poblano-import";
   nutritionTableWidthPercent?: number;
   nutritionTableAlign?: "left" | "center" | "right" | "full";
   nutritionValueColumnPercent?: number;

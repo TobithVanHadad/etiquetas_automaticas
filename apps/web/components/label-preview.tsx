@@ -40,7 +40,10 @@ export function LabelPreview({
             transform: `scale(${zoom})`,
             transformOrigin: "top left",
             borderRadius:
-              layout.label.visualPreset === "crevel-current" ? 16 : 0
+              layout.label.visualPreset === "crevel-current" ||
+              layout.label.visualPreset === "poblano-import"
+                ? 16
+                : 0
           }}
         >
           {layout.elements.map((element) => (

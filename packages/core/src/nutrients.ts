@@ -267,6 +267,28 @@ export const NUTRIENT_CATALOG: NutrientCatalogItem[] = [
     SV: "Salt",
     NO: "salt"
   }),
+  nutrient("sodium", {
+    EN: "sodium",
+    HR: "natrij",
+    CS: "sodík",
+    DA: "natrium",
+    NL: "natrium",
+    ET: "naatrium",
+    FI: "natrium",
+    FR: "sodium",
+    DE: "Natrium",
+    EL: "νάτριο",
+    HU: "nátrium",
+    IT: "sodio",
+    PL: "sód",
+    PT: "sódio",
+    RO: "sodiu",
+    SK: "sodík",
+    SL: "natrij",
+    ES: "sodio",
+    SV: "Natrium",
+    NO: "natrium"
+  }),
   nutrient("vitamins_and_minerals", {
     EN: "vitamins and minerals",
     HR: "vitamini i minerali",

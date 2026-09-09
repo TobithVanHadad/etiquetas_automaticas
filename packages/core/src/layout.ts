@@ -157,8 +157,9 @@ function createStrategyAttempts(
           MIN_TEXT_HEIGHT_MM
         ]
       : [minimumFontMm + 0.18, minimumFontMm + 0.08, minimumFontMm];
-  const spacings =
-    label.visualPreset === "crevel-current" ? [0.75, 0.5, 0.3] : [1.8, 1.2, 0.75];
+  const spacings = isCompactVisualPreset(label)
+    ? [0.75, 0.5, 0.3]
+    : [1.8, 1.2, 0.75];
   const attempts: LayoutStrategy[] = [];
 
   for (const columns of columnVariants) {
@@ -199,6 +200,13 @@ function createStrategyAttempts(
     );
     return leftScore - rightScore;
   });
+}
+
+function isCompactVisualPreset(label: Pick<Required<LabelSpec>, "visualPreset">): boolean {
+  return (
+    label.visualPreset === "crevel-current" ||
+    label.visualPreset === "poblano-import"
+  );
 }
 
 function strategyScore(
@@ -247,9 +255,19 @@ function buildLayoutCandidate(
   const contentWidth = label.widthMm - strategy.marginMm * 2;
   const nutritionWidthMm = getNutritionTableWidthMm(label, contentWidth);
   const minimumFontMm = getMinimumTextHeightMm(label.fontFamily);
-  const compactPreset = label.visualPreset === "crevel-current";
+  const compactPreset = isCompactVisualPreset(label);
+  const primaryLanguage = languages[0] ?? "EN";
+  const primaryContent = product.languages[primaryLanguage];
+  const headerText = product.name || primaryContent?.name || "";
   const headerFontMm = Math.max(compactPreset ? 2.25 : 2.15, minimumFontMm);
-  const headerHeightMm = compactPreset ? 4.8 : 6.8;
+  const headerLineHeight = compactPreset ? 0.98 : 1.08;
+  const measuredHeaderHeightMm =
+    measureRichTextHeightMm(headerText, contentWidth, headerFontMm, headerLineHeight) +
+    0.45;
+  const headerHeightMm = Math.max(
+    compactPreset ? 4.3 : 6.2,
+    Math.min(label.heightMm * 0.16, measuredHeaderHeightMm)
+  );
   const nutritionHeightMm = calculateNutritionHeight(
     product,
     languages,
@@ -264,8 +282,6 @@ function buildLayoutCandidate(
     nutritionHeightMm -
     Math.max(0, label.nutritionTableBottomOffsetMm);
   const bodyBottomMm = tableTopMm - strategy.spacingMm;
-  const primaryLanguage = languages[0] ?? "EN";
-  const primaryContent = product.languages[primaryLanguage];
   let overflow = false;
   let overflowAreaMm2 = 0;
 
@@ -278,9 +294,9 @@ function buildLayoutCandidate(
     widthMm: contentWidth,
     heightMm: headerHeightMm,
     fontMm: headerFontMm,
-    lineHeight: compactPreset ? 1 : 1.08,
+    lineHeight: headerLineHeight,
     weight: "bold",
-    text: primaryContent?.name || product.name
+    text: headerText
   });
 
   if (!compactPreset) {
@@ -442,7 +458,7 @@ function createLanguageBlock(
   strategy: LayoutStrategy,
   label: Required<LabelSpec>
 ): { yMm: number; heightMm: number; elements: LayoutElement[] } {
-  const compactPreset = label.visualPreset === "crevel-current";
+  const compactPreset = isCompactVisualPreset(label);
   const bodyText = createLanguageBodyText(product, language, content, compactPreset);
   const bodyLineHeight = compactPreset ? 1.05 : 1.2;
   const bodyHeight = measureRichTextHeightMm(
@@ -679,15 +695,15 @@ function createNutritionRowHeights(
     Math.max(2, widthMm * fraction - 1.6)
   );
   const baseMeasure = formatBaseMeasure(product.nutrition);
-  const lineHeight = label.visualPreset === "crevel-current" ? 0.98 : 1.02;
+  const lineHeight = isCompactVisualPreset(label) ? 0.98 : 1.02;
   const rowPaddingMm = clampMm(label.nutritionTableRowPaddingMm, 0.2, 2);
   const headerHeight = Math.max(
-    label.visualPreset === "crevel-current" ? 4.2 : 4.8,
+    isCompactVisualPreset(label) ? 4.2 : 4.8,
     measureRichTextHeightMm(
       `${combineNutritionTitles(languages)}\n${combineValuesPerLabels(languages, baseMeasure)}`,
       widthMm - 1.6,
       strategy.tableFontMm,
-      label.visualPreset === "crevel-current" ? 1 : 1.05
+      isCompactVisualPreset(label) ? 1 : 1.05
     ) + rowPaddingMm
   );
   const rowHeights = [headerHeight];
@@ -711,7 +727,7 @@ function createNutritionRowHeights(
 
     rowHeights.push(
       Math.max(
-        label.visualPreset === "crevel-current" ? 2.35 : 2.65,
+        isCompactVisualPreset(label) ? 2.35 : 2.65,
         subHeaderHeight
       ) + rowPaddingMm
     );
@@ -732,7 +748,7 @@ function createNutritionRowHeights(
     );
 
     rowHeights.push(
-      Math.max(label.visualPreset === "crevel-current" ? 2.25 : 2.45, rowTextHeight) +
+      Math.max(isCompactVisualPreset(label) ? 2.25 : 2.45, rowTextHeight) +
         rowPaddingMm
     );
   });

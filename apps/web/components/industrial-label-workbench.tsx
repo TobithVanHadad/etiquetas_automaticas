@@ -73,6 +73,16 @@ type RawImportResult = {
   warnings: string[];
 };
 
+const PRODUCT_METADATA_FIELDS = [
+  "status",
+  "notes",
+  "files",
+  "customer",
+  "format"
+] as const;
+
+type ProductMetadataField = (typeof PRODUCT_METADATA_FIELDS)[number];
+
 export function IndustrialLabelWorkbench() {
   const [product, setProduct] = useState<ProductRecord>(
     withDefaultProductMetadata(sampleProduct)
@@ -194,7 +204,7 @@ export function IndustrialLabelWorkbench() {
     }
   }
 
-  function updateProductMetadata(field: "status" | "notes" | "files", value: string) {
+  function updateProductMetadata(field: ProductMetadataField, value: string) {
     setProduct((current) =>
       withDefaultProductMetadata({
         ...current,
@@ -221,6 +231,69 @@ export function IndustrialLabelWorkbench() {
         }
       }
     }));
+  }
+
+  function addCustomSection(language: LanguageCode) {
+    setProduct((current) => {
+      const content = current.languages[language] ?? {};
+
+      return {
+        ...current,
+        languages: {
+          ...current.languages,
+          [language]: {
+            ...content,
+            customSections: [
+              ...(content.customSections ?? []),
+              { title: "Leyenda", body: "" }
+            ]
+          }
+        }
+      };
+    });
+  }
+
+  function updateCustomSection(
+    language: LanguageCode,
+    index: number,
+    nextSection: Partial<{ title: string; body: string }>
+  ) {
+    setProduct((current) => {
+      const content = current.languages[language] ?? {};
+      const customSections = [...(content.customSections ?? [])];
+      const currentSection = customSections[index] ?? { title: "", body: "" };
+      customSections[index] = { ...currentSection, ...nextSection };
+
+      return {
+        ...current,
+        languages: {
+          ...current.languages,
+          [language]: {
+            ...content,
+            customSections
+          }
+        }
+      };
+    });
+  }
+
+  function removeCustomSection(language: LanguageCode, index: number) {
+    setProduct((current) => {
+      const content = current.languages[language] ?? {};
+
+      return {
+        ...current,
+        languages: {
+          ...current.languages,
+          [language]: {
+            ...content,
+            customSections: (content.customSections ?? []).filter(
+              (_, sectionIndex) => sectionIndex !== index
+            )
+          }
+        }
+      };
+    });
   }
 
   function toggleLanguage(language: LanguageCode) {
@@ -463,16 +536,23 @@ export function IndustrialLabelWorkbench() {
 
     try {
       const attachments = await Promise.all(files.map(fileToLabelAttachment));
-      const nextProduct = setLabelAttachments(product, [
+      let nextProduct = setLabelAttachments(product, [
         ...getLabelAttachments(product),
         ...attachments
       ]);
+      const referenceFormat = createReferenceFormatName(attachments);
+
+      if (referenceFormat && !getProductMetadata(nextProduct, "format").trim()) {
+        nextProduct = setProductMetadata(nextProduct, "format", referenceFormat);
+      }
 
       setProduct(nextProduct);
       setProducts((current) => upsertLocalProduct(current, nextProduct));
       await persistProduct(
         nextProduct,
-        `${attachments.length} archivo(s) de etiqueta cargado(s).`
+        referenceFormat
+          ? `${attachments.length} archivo(s) cargado(s). Formato visual guardado: ${referenceFormat}.`
+          : `${attachments.length} archivo(s) de etiqueta cargado(s).`
       );
     } catch (error) {
       setNotice({
@@ -586,9 +666,14 @@ export function IndustrialLabelWorkbench() {
     setProducts((current) => upsertLocalProduct(current, nextProduct));
     setLanguages(result.languages);
     setActiveLanguage(result.languages[0] ?? activeLanguage);
+    const hasServingValues = nextProduct.nutrition.rows.some((row) =>
+      row.perServing?.trim()
+    );
     setLabel((current) => ({
       ...current,
-      nutritionShowServing: false,
+      ...result.suggestedLabel,
+      nutritionShowServing:
+        result.suggestedLabel?.nutritionShowServing ?? hasServingValues,
       nutritionShowRiPercent: false
     }));
     setNotice({
@@ -604,9 +689,9 @@ export function IndustrialLabelWorkbench() {
   }
 
   return (
-    <main className="min-h-screen bg-[#f4f6f5] text-zinc-950">
-      <div className="grid min-h-screen grid-cols-1 xl:grid-cols-[320px_minmax(520px,1fr)_460px]">
-        <aside className="border-b border-zinc-200 bg-white p-4 xl:border-b-0 xl:border-r">
+    <main className="min-h-screen bg-[#f4f6f5] text-zinc-950 xl:h-screen xl:overflow-hidden">
+      <div className="grid min-h-screen grid-cols-1 xl:h-screen xl:grid-cols-[340px_minmax(560px,1fr)_460px]">
+        <aside className="border-b border-zinc-200 bg-white p-4 xl:h-screen xl:overflow-y-auto xl:border-b-0 xl:border-r">
           <div className="mb-4 flex items-center justify-between">
             <div>
               <h1 className="text-lg font-semibold tracking-normal">
@@ -791,11 +876,11 @@ export function IndustrialLabelWorkbench() {
               />
             </Field>
             <Field label="Nombre base">
-              <input
+              <textarea
                 value={product.name}
                 onChange={(event) => updateProduct({ name: event.target.value })}
                 className={[
-                  "w-full rounded border px-2 py-1.5 text-sm",
+                  "h-16 w-full resize-none rounded border px-2 py-1.5 text-sm",
                   product.name.trim()
                     ? "border-zinc-300"
                     : "border-red-300 bg-red-50 text-red-900"
@@ -820,6 +905,28 @@ export function IndustrialLabelWorkbench() {
                     updateProduct({ netWeight: event.target.value })
                   }
                   className="w-full rounded border border-zinc-300 px-2 py-1.5 text-sm"
+                />
+              </Field>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <Field label="Cliente">
+                <input
+                  value={getProductMetadata(product, "customer")}
+                  placeholder="Poblano, Penisi..."
+                  onChange={(event) =>
+                    updateProductMetadata("customer", event.target.value)
+                  }
+                  className="w-full rounded border border-zinc-300 bg-white px-2 py-1.5 text-sm"
+                />
+              </Field>
+              <Field label="Formato/catalogo">
+                <input
+                  value={getProductMetadata(product, "format")}
+                  placeholder="Crevel, Poblano..."
+                  onChange={(event) =>
+                    updateProductMetadata("format", event.target.value)
+                  }
+                  className="w-full rounded border border-zinc-300 bg-white px-2 py-1.5 text-sm"
                 />
               </Field>
             </div>
@@ -1018,6 +1125,7 @@ export function IndustrialLabelWorkbench() {
                 className="w-full rounded border border-zinc-300 px-2 py-1.5 text-sm"
               >
                 <option value="crevel-current">Crevel actual</option>
+                <option value="poblano-import">Poblano/importador</option>
                 <option value="industrial-plain">Industrial plano</option>
               </select>
             </Field>
@@ -1195,7 +1303,7 @@ export function IndustrialLabelWorkbench() {
           </section>
         </aside>
 
-        <section className="flex min-w-0 flex-col p-4">
+        <section className="flex min-w-0 flex-col p-4 xl:h-screen xl:overflow-hidden">
           <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
             <div>
               <h2 className="text-base font-semibold">Preview industrial</h2>
@@ -1239,10 +1347,12 @@ export function IndustrialLabelWorkbench() {
             </div>
           )}
 
-          <LabelPreview layout={layout} zoom={zoom} />
+          <div className="min-h-0 flex-1 overflow-auto">
+            <LabelPreview layout={layout} zoom={zoom} />
+          </div>
         </section>
 
-        <aside className="border-t border-zinc-200 bg-white p-4 xl:border-l xl:border-t-0">
+        <aside className="border-t border-zinc-200 bg-white p-4 xl:h-screen xl:overflow-y-auto xl:border-l xl:border-t-0">
           <section className="space-y-3">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2 text-sm font-semibold">
@@ -1309,6 +1419,65 @@ export function IndustrialLabelWorkbench() {
                 updateLanguageContent(activeLanguage, "importer", value)
               }
             />
+            <div className="rounded border border-zinc-200 bg-zinc-50 p-2">
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <span className="text-xs font-semibold text-zinc-700">
+                  Leyendas extra
+                </span>
+                <button
+                  type="button"
+                  onClick={() => addCustomSection(activeLanguage)}
+                  className="inline-flex h-7 items-center gap-1 rounded border border-zinc-300 bg-white px-2 text-xs font-semibold hover:border-emerald-700 hover:bg-emerald-50"
+                >
+                  <Plus size={13} />
+                  Agregar
+                </button>
+              </div>
+              {(selectedContent.customSections ?? []).length ? (
+                <div className="space-y-2">
+                  {(selectedContent.customSections ?? []).map((section, index) => (
+                    <div
+                      key={`${section.title}-${index}`}
+                      className="rounded border border-zinc-200 bg-white p-2"
+                    >
+                      <div className="mb-1 grid grid-cols-[1fr_auto] gap-2">
+                        <input
+                          value={section.title}
+                          onChange={(event) =>
+                            updateCustomSection(activeLanguage, index, {
+                              title: event.target.value
+                            })
+                          }
+                          className="min-w-0 rounded border border-zinc-300 px-2 py-1 text-xs font-semibold"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => removeCustomSection(activeLanguage, index)}
+                          className="inline-flex h-7 w-7 items-center justify-center rounded border border-zinc-300 text-zinc-500 hover:bg-red-50 hover:text-red-700"
+                          title="Quitar leyenda"
+                          aria-label="Quitar leyenda"
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      </div>
+                      <textarea
+                        value={section.body}
+                        onChange={(event) =>
+                          updateCustomSection(activeLanguage, index, {
+                            body: event.target.value
+                          })
+                        }
+                        className="h-14 w-full resize-none rounded border border-zinc-300 px-2 py-1 text-xs"
+                      />
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="rounded border border-dashed border-zinc-300 bg-white px-2 py-2 text-xs text-zinc-500">
+                  Sin leyendas adicionales.
+                </div>
+              )}
+            </div>
           </section>
 
           <section className="mt-5 space-y-3 border-t border-zinc-200 pt-4">
@@ -1766,6 +1935,7 @@ function parseSavedLabelSpec(value: Record<string, unknown>): Partial<LabelSpec>
   }
   if (
     value.visualPreset === "crevel-current" ||
+    value.visualPreset === "poblano-import" ||
     value.visualPreset === "industrial-plain"
   ) {
     label.visualPreset = value.visualPreset;
@@ -1835,13 +2005,33 @@ const IMPORT_FIELD_ALIASES: Record<string, string[]> = {
   countryOfOrigin: ["countryOfOrigin", "pais origen", "país origen", "origen"],
   status: ["status", "estatus", "estado"],
   notes: ["notes", "note", "notas", "nota", "notas etiqueta"],
-  files: ["files", "file", "archivos", "archivo", "archivos etiqueta"]
+  files: ["files", "file", "archivos", "archivo", "archivos etiqueta"],
+  customer: ["customer", "cliente", "client", "distribuidor", "importador cliente"],
+  format: ["format", "formato", "layout", "plantilla", "estilo etiqueta"]
 };
 
-const METADATA_ALIASES: Record<"status" | "notes" | "files", string[]> = {
+const METADATA_ALIASES: Record<ProductMetadataField, string[]> = {
   status: ["status", "estatus", "estado"],
   notes: ["notes", "note", "notas", "nota", "labelNotes", "label_notes"],
-  files: ["files", "file", "archivos", "archivo", "labelFiles", "label_files"]
+  files: ["files", "file", "archivos", "archivo", "labelFiles", "label_files"],
+  customer: [
+    "customer",
+    "cliente",
+    "client",
+    "distribuidor",
+    "importadorCliente",
+    "importador_cliente"
+  ],
+  format: [
+    "format",
+    "formato",
+    "layout",
+    "plantilla",
+    "labelFormat",
+    "label_format",
+    "estiloEtiqueta",
+    "estilo_etiqueta"
+  ]
 };
 
 function withDefaultProductMetadata(product: ProductRecord): ProductRecord {
@@ -1850,6 +2040,8 @@ function withDefaultProductMetadata(product: ProductRecord): ProductRecord {
     metadata: {
       ...product.metadata,
       status: getProductMetadata(product, "status"),
+      customer: getProductMetadata(product, "customer"),
+      format: getProductMetadata(product, "format"),
       attachments: getLabelAttachments(product)
     }
   };
@@ -1857,7 +2049,7 @@ function withDefaultProductMetadata(product: ProductRecord): ProductRecord {
 
 function getProductMetadata(
   product: ProductRecord,
-  field: "status" | "notes" | "files"
+  field: ProductMetadataField
 ): string {
   const metadata = product.metadata ?? {};
   const aliases = METADATA_ALIASES[field];
@@ -1879,7 +2071,7 @@ function getProductMetadata(
 
 function setProductMetadata(
   product: ProductRecord,
-  field: "status" | "notes" | "files",
+  field: ProductMetadataField,
   value: string
 ): ProductRecord {
   return withDefaultProductMetadata({
@@ -1910,6 +2102,32 @@ function setLabelAttachments(
       attachments
     }
   });
+}
+
+function createReferenceFormatName(attachments: LabelAttachment[]): string {
+  const reference = attachments.find((attachment) =>
+    isVisualReferenceAttachment(attachment)
+  );
+
+  if (!reference) {
+    return "";
+  }
+
+  const baseName = reference.name
+    .replace(/\.[^.]+$/, "")
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  return baseName ? `Referencia ${baseName}` : "Referencia visual";
+}
+
+function isVisualReferenceAttachment(attachment: LabelAttachment): boolean {
+  return (
+    attachment.mimeType.startsWith("image/") ||
+    attachment.mimeType === "application/pdf" ||
+    /\.(?:png|jpe?g|webp|gif|pdf)$/i.test(attachment.name)
+  );
 }
 
 function isLabelAttachment(value: unknown): value is LabelAttachment {
@@ -2001,6 +2219,8 @@ function createImportedProductBase(sku: string, source: ProductRecord): ProductR
       status: "",
       notes: "",
       files: "",
+      customer: "",
+      format: "",
       attachments: []
     }
   });
@@ -2011,7 +2231,7 @@ function preserveManualImportMetadata(
   imported: ProductRecord,
   row: Record<string, string>
 ): ProductRecord {
-  return (["status", "notes", "files"] as const).reduce((current, field) => {
+  return PRODUCT_METADATA_FIELDS.reduce((current, field) => {
     const incoming = readImportField(row, field);
 
     if (hasImportValue(incoming)) {
@@ -2032,6 +2252,7 @@ type RawSectionKey =
 type RawParsedLabel = RawImportResult & {
   product: ProductRecord;
   languages: LanguageCode[];
+  suggestedLabel?: Partial<LabelSpec>;
 };
 
 const RAW_SECTION_KEYS: RawSectionKey[] = [
@@ -2051,6 +2272,11 @@ const RAW_DEFAULT_NUTRIENT_IDS = [
   "protein",
   "salt"
 ];
+
+type RawNutritionColumnMode =
+  | "per100-only"
+  | "serving-then-per100"
+  | "per100-then-serving";
 
 const RAW_SECTION_ALIASES: Record<RawSectionKey, string[]> = {
   ingredients: [
@@ -2098,6 +2324,55 @@ const RAW_SECTION_ALIASES: Record<RawSectionKey, string[]> = {
   ]
 };
 
+const RAW_NUTRIENT_ALIASES: Record<string, string[]> = {
+  energy: [
+    "energy",
+    "energia",
+    "energía",
+    "valor energetico",
+    "valor energético",
+    "calories"
+  ],
+  fat: ["total fat", "fat", "grasas", "fett", "matieres grasses"],
+  saturates: [
+    "saturated fat",
+    "saturated fats",
+    "of which saturates",
+    "grasas saturadas",
+    "de las cuales saturadas",
+    "gesattigte fettsauren",
+    "gesättigte fettsäuren"
+  ],
+  carbohydrate: [
+    "total carbohydrates",
+    "total carbohydrate",
+    "carbohydrates",
+    "carbohydrate",
+    "hidratos de carbono",
+    "carbohidratos",
+    "kohlenhydrate"
+  ],
+  sugars: [
+    "sugar",
+    "sugars",
+    "azucares",
+    "azúcares",
+    "of which sugars",
+    "de los cuales azucares",
+    "de las cuales azucares",
+    "davon zucker"
+  ],
+  fiber: ["fibre", "fiber", "fibra", "fibra alimentaria", "ballaststoffe"],
+  protein: ["protein", "proteina", "proteínas", "proteinas", "eiweiss", "eiweiß"],
+  salt: ["salt", "sal", "salz"],
+  sodium: ["sodium", "sodio", "natrium"],
+  vitamin_a: ["vitamin a", "vitamina a"],
+  vitamin_c: ["vitamin c", "vitamina c"],
+  vitamin_d: ["vitamin d", "vitamina d"],
+  calcium: ["calcium", "calcio"],
+  iron: ["iron", "hierro", "eisen"]
+};
+
 function parseRawLabelText(
   text: string,
   source: ProductRecord,
@@ -2122,6 +2397,10 @@ function parseRawLabelText(
   const gtin = matchRawValue(normalizedText, /\b(?:GTIN|EAN)[:#]?\s*(\d{8,14})\b/i);
   const netWeight = extractRawNetWeight(normalizedText);
   const title = extractRawTitle(normalizedText);
+  const customerName = extractRawCustomerName(normalizedText);
+  const importerText = extractRawImporterText(normalizedText);
+  const originText = extractRawOriginText(normalizedText);
+  const rawLegends = extractRawLegends(normalizedText);
 
   if (sku) {
     next.sku = sku;
@@ -2157,6 +2436,24 @@ function parseRawLabelText(
     detected.push("titulo");
   }
 
+  if (customerName) {
+    next.metadata = {
+      ...next.metadata,
+      customer: customerName
+    };
+    detected.push(`cliente ${customerName}`);
+  }
+
+  const formatName = detectRawFormatName(normalizedText, customerName);
+
+  if (formatName) {
+    next.metadata = {
+      ...next.metadata,
+      format: formatName
+    };
+    detected.push(`formato ${formatName}`);
+  }
+
   const explicitLanguageSegments = extractRawLanguageSegments(normalizedText);
   const inferredLanguages = explicitLanguageSegments.length
     ? []
@@ -2190,7 +2487,7 @@ function parseRawLabelText(
   }
 
   for (const segment of languageSegments) {
-    const cleanSegment = removeKnownTitle(removeNutritionTail(segment.text), title);
+    const cleanSegment = removeKnownTitle(removeRawNutritionBlock(segment.text), title);
     const sections = parseRawLanguageSections(cleanSegment, segment.language);
     const currentContent = next.languages[segment.language] ?? {};
     const languageContent: ProductLanguageContent = {
@@ -2205,6 +2502,27 @@ function parseRawLabelText(
         languageContent[key] = mergeDetectedText(languageContent[key], value);
         detected.push(`${segment.language} ${key}`);
       }
+    }
+
+    if (importerText && !languageContent.importer?.trim()) {
+      languageContent.importer = mergeDetectedText(
+        languageContent.importer,
+        importerText
+      );
+      detected.push(`${segment.language} importer`);
+    }
+
+    if (originText && !languageContent.origin?.trim()) {
+      languageContent.origin = mergeDetectedText(languageContent.origin, originText);
+      detected.push(`${segment.language} origin`);
+    }
+
+    if (rawLegends.length) {
+      languageContent.customSections = mergeRawCustomSections(
+        languageContent.customSections,
+        rawLegends
+      );
+      detected.push(`${segment.language} leyendas`);
     }
 
     if (!Object.values(sections).some(Boolean) && cleanSegment) {
@@ -2222,12 +2540,14 @@ function parseRawLabelText(
     ...next.nutrition,
     rows: applyRawNutritionValues(normalizedText, resultLanguages, detected)
   };
+  const suggestedLabel = createRawLabelSuggestion(normalizedText, next);
 
   const missing = getProductValidationIssues(next, resultLanguages);
 
   return {
     product: cleanProduct(next),
     languages: resultLanguages,
+    suggestedLabel,
     detected: [...new Set(detected)],
     missing,
     warnings
@@ -2291,6 +2611,14 @@ function extractRawBaseMeasure(
 }
 
 function extractRawServingSize(text: string): string {
+  const servingSizeMatch = text.match(
+    /\bServing\s+Size\s*(\d+(?:[.,]\d+)?)\s*(g|kg|ml|l)\b/i
+  );
+
+  if (servingSizeMatch && isNutritionUnit(servingSizeMatch[2])) {
+    return `Per ${servingSizeMatch[1]} ${servingSizeMatch[2].toLowerCase()}`;
+  }
+
   const matches = [
     ...text.matchAll(/\b(?:per|por)\s*(\d+(?:[.,]\d+)?)\s*(g|kg|ml|l)\b/gi)
   ];
@@ -2308,11 +2636,7 @@ function isNutritionUnit(value: string): value is "g" | "ml" | "kg" | "l" {
 }
 
 function extractRawTitle(text: string): string {
-  const firstLanguageMarker = findFirstLanguageMarkerIndex(text);
-  const nutritionMarker = findNutritionMarkerIndex(text);
-  const firstContentMarker = Math.min(
-    ...[firstLanguageMarker, nutritionMarker].filter((index) => index >= 0)
-  );
+  const firstContentMarker = findFirstContentMarkerIndex(text);
   const headerText = Number.isFinite(firstContentMarker)
     ? text.slice(0, firstContentMarker)
     : text;
@@ -2321,10 +2645,40 @@ function extractRawTitle(text: string): string {
     .map((line) => stripRawHeaderMetadata(line))
     .map((line) => cleanRawBody(line))
     .filter(Boolean)
-    .filter(isRawTitleCandidate);
-  const title = lines.join(" ").replace(/\s{2,}/g, " ").trim();
+    .filter(isRawTitleCandidate)
+    .slice(0, 4);
+  const title = lines.join("\n").trim();
 
   return trimRawTitle(title);
+}
+
+function findFirstContentMarkerIndex(text: string): number {
+  const markers = [
+    findFirstLanguageMarkerIndex(text),
+    findNutritionMarkerIndex(text),
+    findFirstRawSectionMarkerIndex(text),
+    text.search(/\bServing\s+Size\b/i),
+    text.search(/\b(?:BBD|LOT)\s*:/i),
+    text.search(/\bProduct\s+From\b/i)
+  ].filter((index) => index >= 0);
+
+  return markers.length ? Math.min(...markers) : Number.POSITIVE_INFINITY;
+}
+
+function findFirstRawSectionMarkerIndex(text: string): number {
+  const aliases = Object.values(RAW_SECTION_ALIASES).flat();
+  const indexes = aliases
+    .map((alias) => {
+      const aliasPattern = escapeRegExp(alias).replace(/\\ /g, "\\s+");
+      const match = new RegExp(`(^|[\\s/])${aliasPattern}\\s*[:.]`, "iu").exec(
+        text
+      );
+
+      return match ? match.index + (match[1]?.length ?? 0) : -1;
+    })
+    .filter((index) => index >= 0);
+
+  return indexes.length ? Math.min(...indexes) : -1;
 }
 
 function stripRawHeaderMetadata(line: string): string {
@@ -2343,16 +2697,16 @@ function isRawTitleCandidate(line: string): boolean {
   return (
     letters.length >= 3 &&
     !/^(?:sku|gtin|ean|cr)\b/i.test(comparable) &&
-    !/(?:zutaten|ingredientes|ingredients|nutrition|nahrwert|nährwert)/i.test(
-      comparable
-    )
+    !/(?:zutaten|ingredientes|ingredients|nutrition|nahrwert|naehrwert|serving size|serving per package|imported by|importado por|importiert von|bbd|lot)/i.test(comparable)
   );
 }
 
 function trimRawTitle(title: string): string {
-  const compact = cleanRawBody(title)
-    .replace(/\s+([,.;:])/g, "$1")
-    .replace(/\s{2,}/g, " ");
+  const compact = title
+    .split("\n")
+    .map((line) => cleanRawBody(line).replace(/\s+([,.;:])/g, "$1"))
+    .filter(Boolean)
+    .join("\n");
 
   return compact.length > 220 ? compact.slice(0, 220).trim() : compact;
 }
@@ -2376,6 +2730,150 @@ function findNutritionMarkerIndex(text: string): number {
   );
 
   return marker >= 0 ? marker : -1;
+}
+
+function extractRawCustomerName(text: string): string {
+  const importedByMatch = text.match(/\bImported by\s+([^,\n.]+)/i);
+
+  if (importedByMatch?.[1]) {
+    return cleanRawBody(importedByMatch[1]);
+  }
+
+  const poblanoMatch = text.match(/\b(Poblano(?:\s+Distribution\s+Foods)?)\b/i);
+
+  if (poblanoMatch?.[1]) {
+    return cleanRawBody(poblanoMatch[1]);
+  }
+
+  return "";
+}
+
+function extractRawImporterText(text: string): string {
+  const match = text.match(
+    /\b(?:Imported by|Importado por|Importiert von|Importer|Importeur)\s*:?\s*([\s\S]*?)(?=\b(?:BBD|LOT|Product From|PRODUCT FROM|Nutrition|Nährwert|Naehrwert|Información nutricional|Informacion nutricional)\b|$)/i
+  );
+
+  return match?.[1] ? cleanRawMultiline(match[1]) : "";
+}
+
+function extractRawOriginText(text: string): string {
+  const productFromMatch = text.match(/\bProduct\s+From\s+([A-ZÁÉÍÓÚÜÑ ]{3,})/i);
+
+  if (productFromMatch?.[1]) {
+    return `Product from ${cleanRawBody(productFromMatch[1])}`;
+  }
+
+  const originMatch = text.match(
+    /\b(?:Country of origin|Pais de origen|País de origen|Origen|Herkunft|Origine)\s*:?\s*([^\n.]+)/i
+  );
+
+  if (originMatch?.[1]) {
+    return cleanRawBody(originMatch[1]);
+  }
+
+  return "";
+}
+
+function extractRawLegends(text: string): Array<{ title: string; body: string }> {
+  const legends: Array<{ title: string; body: string }> = [];
+  const dateLotParts: string[] = [];
+
+  if (/\bBBD\s*:/i.test(text)) {
+    dateLotParts.push("BBD:");
+  }
+
+  if (/\bLOT\s*:/i.test(text)) {
+    dateLotParts.push("LOT:");
+  }
+
+  if (dateLotParts.length) {
+    legends.push({
+      title: "Fecha/lote",
+      body: dateLotParts.join(" ")
+    });
+  }
+
+  const productFrom = text.match(/\b(Product\s+From\s+[A-ZÁÉÍÓÚÜÑ ]{3,})/i);
+
+  if (productFrom?.[1]) {
+    legends.push({
+      title: "Origen destacado",
+      body: applyAutoBoldUppercase(cleanRawBody(productFrom[1]))
+    });
+  }
+
+  return legends;
+}
+
+function cleanRawMultiline(value: string): string {
+  return value
+    .split("\n")
+    .map((line) => cleanRawBody(line))
+    .filter(Boolean)
+    .join(" ");
+}
+
+function detectRawFormatName(text: string, customerName: string): string {
+  if (
+    /Nutrition\s+Facts/i.test(text) &&
+    /\b(?:Imported by|BBD|LOT|Product From)\b/i.test(text)
+  ) {
+    return customerName ? `${customerName} Nutrition Facts` : "Nutrition Facts importador";
+  }
+
+  return "";
+}
+
+function createRawLabelSuggestion(
+  text: string,
+  product: ProductRecord
+): Partial<LabelSpec> {
+  const hasServingValues = product.nutrition.rows.some((row) =>
+    row.perServing?.trim()
+  );
+
+  if (
+    /Nutrition\s+Facts/i.test(text) &&
+    /\b(?:Imported by|BBD|LOT|Product From)\b/i.test(text)
+  ) {
+    return {
+      visualPreset: "poblano-import",
+      nutritionTableAlign: "left",
+      nutritionTableWidthPercent: 58,
+      nutritionLabelColumnPercent: 48,
+      nutritionValueColumnPercent: 31,
+      nutritionTableRowPaddingMm: 0.35,
+      nutritionTableFontScalePercent: 100,
+      nutritionShowServing: hasServingValues
+    };
+  }
+
+  return {
+    nutritionShowServing: hasServingValues
+  };
+}
+
+function mergeRawCustomSections(
+  existing: ProductLanguageContent["customSections"],
+  incoming: Array<{ title: string; body: string }>
+): ProductLanguageContent["customSections"] {
+  const merged = [...(existing ?? [])];
+
+  incoming.forEach((section) => {
+    const normalizedTitle = normalizeComparable(section.title);
+    const normalizedBody = normalizeComparable(section.body);
+    const alreadyExists = merged.some(
+      (candidate) =>
+        normalizeComparable(candidate.title) === normalizedTitle &&
+        normalizeComparable(candidate.body) === normalizedBody
+    );
+
+    if (!alreadyExists) {
+      merged.push(section);
+    }
+  });
+
+  return merged;
 }
 
 function extractRawLanguageSegments(text: string): Array<{
@@ -2413,7 +2911,7 @@ function createInferredRawSegments(
 ): Array<{ language: LanguageCode; text: string }> {
   const language =
     inferredLanguages[0] ?? fallbackLanguages[0] ?? ("ES" as LanguageCode);
-  const body = removeKnownTitle(removeNutritionTail(text), title);
+  const body = removeKnownTitle(removeRawNutritionBlock(text), title);
 
   return [
     {
@@ -2468,7 +2966,8 @@ function parseRawLanguageSections(
 
   matches.forEach((match, index) => {
     const nextMatch = matches[index + 1];
-    const body = cleanRawBody(
+    const body = cleanRawSectionBody(
+      match.key,
       segment.slice(match.end, nextMatch?.start ?? segment.length)
     );
 
@@ -2521,12 +3020,40 @@ function rawSectionAliases(
   ].filter(Boolean);
 }
 
-function removeNutritionTail(text: string): string {
-  const marker = text.search(
-    /(?:Nährwert|Naehrwert|Información nutricional|Informacion nutricional|Nutrition|Valeurs|Voedingswaarde)/i
+function removeRawNutritionBlock(text: string): string {
+  const marker = findNutritionMarkerIndex(text);
+
+  if (marker < 0) {
+    return text;
+  }
+
+  const before = text.slice(0, marker).trim();
+  const after = text.slice(marker);
+  const nextSemanticMarker = after.search(
+    /\b(?:Imported by|Importado por|Importiert von|Importer|Importeur|BBD|LOT|Product From|Product of|Made in|Hecho en|Hergestellt)\b/i
   );
 
-  return marker >= 0 ? text.slice(0, marker).trim() : text;
+  if (nextSemanticMarker > 0) {
+    return `${before}\n${after.slice(nextSemanticMarker).trim()}`.trim();
+  }
+
+  return before;
+}
+
+function cleanRawSectionBody(key: RawSectionKey, value: string): string {
+  let cleaned = removeRawNutritionBlock(value);
+
+  if (key === "ingredients") {
+    cleaned = cleaned
+      .replace(/\bServing\s+Size\b[\s\S]*$/i, " ")
+      .replace(/\bServing\s+per\s+Package\b[\s\S]*$/i, " ");
+  }
+
+  return cleanRawBody(
+    cleaned
+      .replace(/\b(?:BBD|LOT)\s*:\s*[^\n]*/gi, " ")
+      .replace(/\bProduct\s+From\s+[A-ZÁÉÍÓÚÜÑ ]{3,}/gi, " ")
+  );
 }
 
 function removeKnownTitle(text: string, title: string): string {
@@ -2564,6 +3091,7 @@ function applyRawNutritionValues(
     .map((line) => cleanRawBody(line))
     .filter(Boolean);
   const detectedIds = new Set<string>();
+  const columnMode = inferRawNutritionColumnMode(text);
 
   for (const row of NUTRIENT_CATALOG) {
     const line = lines.find((candidate) =>
@@ -2608,31 +3136,99 @@ function applyRawNutritionValues(
 
     detected.push(`nutricion ${row.id}`);
 
-    if (row.id === "energy" && values.length >= 4) {
-      return {
-        ...row,
-        per100g: `${values[0]} / ${values[1]}`,
-        perServing: `${values[2]} / ${values[3]}`,
-        riPercent: values[4] ?? row.riPercent
-      };
-    }
+    return assignRawNutritionValues(row, values, columnMode);
+  });
+}
 
-    if (row.id === "energy" && values.length >= 2) {
-      return {
-        ...row,
-        per100g: `${values[0]} / ${values[1]}`,
-        perServing: values[2] ?? row.perServing,
-        riPercent: values[3] ?? row.riPercent
-      };
-    }
+function inferRawNutritionColumnMode(text: string): RawNutritionColumnMode {
+  const servingColumnIndex = text.search(
+    /\b(?:Avg\s+Qty\s+per\s+Serving|Qty\s+per\s+Serving|Per\s+(?!100\b)\d+(?:[.,]\d+)?\s*(?:g|kg|ml|l)|Por\s+(?!100\b)\d+(?:[.,]\d+)?\s*(?:g|kg|ml|l)|Porci[oó]n)\b/i
+  );
+  const per100Index = text.search(
+    /\b(?:Per|Por|Je|Pour|Voor|Werte\s+je|Valores\s+por|Values\s+per)\s*100\s*(?:g|kg|ml|l)\b/i
+  );
 
+  if (servingColumnIndex >= 0 && per100Index >= 0) {
+    return servingColumnIndex < per100Index
+      ? "serving-then-per100"
+      : "per100-then-serving";
+  }
+
+  return "per100-only";
+}
+
+function assignRawNutritionValues(
+  row: NutritionRow,
+  values: string[],
+  columnMode: RawNutritionColumnMode
+): NutritionRow {
+  const riPercent = values.find((value) => value.includes("%")) ?? row.riPercent;
+  const nutrientValues = values.filter((value) => !value.includes("%"));
+
+  if (row.id === "energy") {
+    return assignRawEnergyValues(row, nutrientValues, riPercent, columnMode);
+  }
+
+  if (columnMode === "serving-then-per100" && nutrientValues.length >= 2) {
     return {
       ...row,
-      per100g: values[0] ?? row.per100g,
-      perServing: values[1] ?? row.perServing,
-      riPercent: values[2] ?? row.riPercent
+      perServing: nutrientValues[0] ?? row.perServing,
+      per100g: nutrientValues[1] ?? row.per100g,
+      riPercent
     };
-  });
+  }
+
+  if (columnMode === "per100-then-serving" && nutrientValues.length >= 2) {
+    return {
+      ...row,
+      per100g: nutrientValues[0] ?? row.per100g,
+      perServing: nutrientValues[1] ?? row.perServing,
+      riPercent
+    };
+  }
+
+  return {
+    ...row,
+    per100g: nutrientValues[0] ?? row.per100g,
+    perServing: nutrientValues[1] ?? row.perServing,
+    riPercent
+  };
+}
+
+function assignRawEnergyValues(
+  row: NutritionRow,
+  values: string[],
+  riPercent: string | undefined,
+  columnMode: RawNutritionColumnMode
+): NutritionRow {
+  if (columnMode === "serving-then-per100" && values.length >= 2) {
+    return {
+      ...row,
+      perServing: combineEnergyValues(values.slice(0, values.length >= 4 ? 2 : 1)),
+      per100g: combineEnergyValues(values.slice(values.length >= 4 ? 2 : 1)),
+      riPercent
+    };
+  }
+
+  if (columnMode === "per100-then-serving" && values.length >= 2) {
+    return {
+      ...row,
+      per100g: combineEnergyValues(values.slice(0, values.length >= 4 ? 2 : 1)),
+      perServing: combineEnergyValues(values.slice(values.length >= 4 ? 2 : 1)),
+      riPercent
+    };
+  }
+
+  return {
+    ...row,
+    per100g: combineEnergyValues(values),
+    perServing: row.perServing,
+    riPercent
+  };
+}
+
+function combineEnergyValues(values: string[]): string {
+  return values.filter(Boolean).join(" / ");
 }
 
 function nutrientAliases(
@@ -2640,6 +3236,7 @@ function nutrientAliases(
   languages: LanguageCode[]
 ): string[] {
   return [
+    ...(RAW_NUTRIENT_ALIASES[row.id] ?? []),
     ...languages.map((language) => row.label[language] ?? ""),
     row.label.EN,
     row.id.replace(/_/g, " ")
@@ -2648,7 +3245,9 @@ function nutrientAliases(
 
 function extractRawNutritionNumbers(line: string): string[] {
   return (
-    line.match(/\d+(?:[.,]\d+)?\s*(?:kJ|kcal|g|mg|µg|ug|%)/gi) ?? []
+    line.match(
+      /(?:\d{1,3}(?:[,.]\d{3})+|\d+(?:[.,]\d+)?)\s*(?:kJ|kcal|g|mg|µg|μg|ug|%)/gi
+    ) ?? []
   ).map((value) => value.replace(/\s+/g, " ").trim());
 }
 
@@ -2853,12 +3452,12 @@ function canonicalImportSection(section: string): string {
 
 function canonicalMetadataSection(
   section: string
-): "status" | "notes" | "files" | undefined {
+): ProductMetadataField | undefined {
   const normalized = normalizeImportKey(section);
 
   for (const [field, aliases] of Object.entries(METADATA_ALIASES)) {
     if (aliases.map(normalizeImportKey).includes(normalized)) {
-      return field as "status" | "notes" | "files";
+      return field as ProductMetadataField;
     }
   }
 
@@ -3022,7 +3621,7 @@ function applyWideImportRow(
     }
   });
 
-  (["status", "notes", "files"] as const).forEach((field) => {
+  PRODUCT_METADATA_FIELDS.forEach((field) => {
     const value = readImportField(row, field);
 
     if (hasImportValue(value)) {
