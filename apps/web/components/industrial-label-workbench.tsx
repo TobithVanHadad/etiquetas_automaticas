@@ -5,6 +5,7 @@ import {
   Bold,
   Database,
   Download,
+  Eraser,
   FileCode2,
   Languages,
   Minus,
@@ -823,6 +824,26 @@ export function IndustrialLabelWorkbench() {
     });
   }
 
+  function removeRawTextBold() {
+    const textarea = rawTextareaRef.current;
+
+    if (!textarea) {
+      setRawText((current) => current.replace(/\*\*/g, ""));
+      return;
+    }
+
+    const start = textarea.selectionStart;
+    const end = textarea.selectionEnd;
+    const result = removeBoldFromEditorValue(rawText, start, end);
+
+    setRawText(result.value);
+
+    requestAnimationFrame(() => {
+      textarea.focus();
+      textarea.setSelectionRange(result.start, result.end);
+    });
+  }
+
   function applyPreviewSelectionBold() {
     const selection = previewSelection.trim();
 
@@ -847,6 +868,33 @@ export function IndustrialLabelWorkbench() {
     setNotice({
       tone: "success",
       message: `Negrita aplicada a "${truncatePreviewSelection(selection)}".`
+    });
+  }
+
+  function removePreviewSelectionBold() {
+    const selection = previewSelection.trim();
+
+    if (!selection) {
+      return;
+    }
+
+    const result = removeBoldSelectionInProduct(product, selection);
+
+    if (!result.changed) {
+      setNotice({
+        tone: "error",
+        message:
+          "No encontre esa seleccion marcada en negrita. Seleccione una palabra que ya este en negrita."
+      });
+      return;
+    }
+
+    setProduct(result.product);
+    setProducts((current) => upsertLocalProduct(current, result.product));
+    setPreviewSelection("");
+    setNotice({
+      tone: "success",
+      message: `Negrita quitada de "${truncatePreviewSelection(selection)}".`
     });
   }
 
@@ -967,6 +1015,15 @@ export function IndustrialLabelWorkbench() {
                   aria-label="Negrita"
                 >
                   <Bold size={15} />
+                </button>
+                <button
+                  type="button"
+                  onClick={removeRawTextBold}
+                  className="inline-flex h-7 w-7 items-center justify-center rounded text-zinc-700 hover:bg-white hover:text-emerald-800"
+                  title="Quitar negrita"
+                  aria-label="Quitar negrita"
+                >
+                  <Eraser size={15} />
                 </button>
               </div>
               <textarea
@@ -1517,17 +1574,28 @@ export function IndustrialLabelWorkbench() {
             </div>
             <div className="flex items-center gap-2">
               {previewSelection ? (
-                <button
-                  type="button"
-                  onClick={applyPreviewSelectionBold}
-                  className="inline-flex min-h-8 max-w-56 items-center gap-1 rounded border border-emerald-700 bg-emerald-50 px-2 text-xs font-semibold text-emerald-900 hover:bg-emerald-100"
-                  title={`Poner en negrita: ${previewSelection}`}
-                >
-                  <Bold size={14} />
-                  <span className="truncate">
-                    Negrita: {truncatePreviewSelection(previewSelection)}
-                  </span>
-                </button>
+                <div className="flex max-w-72 items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={applyPreviewSelectionBold}
+                    className="inline-flex min-h-8 min-w-0 items-center gap-1 rounded border border-emerald-700 bg-emerald-50 px-2 text-xs font-semibold text-emerald-900 hover:bg-emerald-100"
+                    title={`Poner en negrita: ${previewSelection}`}
+                  >
+                    <Bold size={14} />
+                    <span className="truncate">
+                      Negrita: {truncatePreviewSelection(previewSelection)}
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={removePreviewSelectionBold}
+                    className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded border border-zinc-300 bg-white text-zinc-700 hover:border-emerald-700 hover:bg-emerald-50"
+                    title={`Quitar negrita: ${previewSelection}`}
+                    aria-label="Quitar negrita"
+                  >
+                    <Eraser size={14} />
+                  </button>
+                </div>
               ) : null}
               <IconButton
                 label="Reducir zoom"
@@ -2022,6 +2090,28 @@ function TextAreaField({
     });
   }
 
+  function removeBold() {
+    const textarea = textareaRef.current;
+
+    if (!textarea) {
+      onChange(value.replace(/\*\*/g, ""));
+      return;
+    }
+
+    const result = removeBoldFromEditorValue(
+      value,
+      textarea.selectionStart,
+      textarea.selectionEnd
+    );
+
+    onChange(result.value);
+
+    requestAnimationFrame(() => {
+      textarea.focus();
+      textarea.setSelectionRange(result.start, result.end);
+    });
+  }
+
   return (
     <Field label={label}>
       <div
@@ -2039,6 +2129,15 @@ function TextAreaField({
             aria-label="Negrita"
           >
             <Bold size={15} />
+          </button>
+          <button
+            type="button"
+            onClick={removeBold}
+            className="inline-flex h-7 w-7 items-center justify-center rounded text-zinc-700 hover:bg-white hover:text-emerald-800"
+            title="Quitar negrita"
+            aria-label="Quitar negrita"
+          >
+            <Eraser size={15} />
           </button>
         </div>
         <textarea
@@ -2144,9 +2243,24 @@ function boldSelectionInProduct(
   product: ProductRecord,
   selection: string
 ): { product: ProductRecord; changed: boolean } {
+  return transformSelectionInProduct(product, selection, boldSelectionInText);
+}
+
+function removeBoldSelectionInProduct(
+  product: ProductRecord,
+  selection: string
+): { product: ProductRecord; changed: boolean } {
+  return transformSelectionInProduct(product, selection, removeBoldSelectionInText);
+}
+
+function transformSelectionInProduct(
+  product: ProductRecord,
+  selection: string,
+  transform: (value: string | undefined, selection: string) => string | undefined
+): { product: ProductRecord; changed: boolean } {
   let changed = false;
-  const bold = (value?: string): string | undefined => {
-    const next = boldSelectionInText(value, selection);
+  const apply = (value?: string): string | undefined => {
+    const next = transform(value, selection);
 
     if (next !== value) {
       changed = true;
@@ -2164,15 +2278,15 @@ function boldSelectionInProduct(
         language,
         {
           ...content,
-          name: bold(content.name),
-          ingredients: bold(content.ingredients),
-          warnings: bold(content.warnings),
-          conservation: bold(content.conservation),
-          origin: bold(content.origin),
-          importer: bold(content.importer),
+          name: apply(content.name),
+          ingredients: apply(content.ingredients),
+          warnings: apply(content.warnings),
+          conservation: apply(content.conservation),
+          origin: apply(content.origin),
+          importer: apply(content.importer),
           customSections: content.customSections?.map((section) => ({
-            title: bold(section.title) ?? section.title,
-            body: bold(section.body) ?? section.body
+            title: apply(section.title) ?? section.title,
+            body: apply(section.body) ?? section.body
           }))
         }
       ];
@@ -2182,7 +2296,7 @@ function boldSelectionInProduct(
     const nextLabels = { ...row.label };
 
     (Object.keys(nextLabels) as LanguageCode[]).forEach((language) => {
-      const nextLabel = bold(nextLabels[language]);
+      const nextLabel = apply(nextLabels[language]);
 
       if (nextLabel) {
         nextLabels[language] = nextLabel;
@@ -2194,6 +2308,7 @@ function boldSelectionInProduct(
       label: nextLabels
     };
   });
+  const nextName = apply(product.name) ?? product.name;
 
   if (!changed) {
     return { product, changed: false };
@@ -2202,7 +2317,7 @@ function boldSelectionInProduct(
   return {
     product: withDefaultProductMetadata({
       ...product,
-      name: bold(product.name) ?? product.name,
+      name: nextName,
       languages: nextLanguages,
       nutrition: {
         ...product.nutrition,
@@ -2233,6 +2348,59 @@ function boldSelectionInText(value: string | undefined, selection: string): stri
   }
 
   return `${value.slice(0, index)}**${value.slice(index, end)}**${value.slice(end)}`;
+}
+
+function removeBoldSelectionInText(
+  value: string | undefined,
+  selection: string
+): string | undefined {
+  if (!value || !selection.trim()) {
+    return value;
+  }
+
+  const selectionPattern = escapeRegExp(selection.trim()).replace(/\s+/g, "\\s+");
+  const pattern = new RegExp(`\\*\\*(${selectionPattern})\\*\\*`, "i");
+
+  if (!pattern.test(value)) {
+    return value;
+  }
+
+  return value.replace(pattern, "$1");
+}
+
+function removeBoldFromEditorValue(
+  value: string,
+  start: number,
+  end: number
+): { value: string; start: number; end: number } {
+  if (start === end) {
+    const next = value.replace(/\*\*/g, "");
+    return {
+      value: next,
+      start: Math.min(start, next.length),
+      end: Math.min(start, next.length)
+    };
+  }
+
+  const selected = value.slice(start, end);
+  const before = value.slice(0, start);
+  const after = value.slice(end);
+
+  if (before.endsWith("**") && after.startsWith("**")) {
+    return {
+      value: `${before.slice(0, -2)}${selected}${after.slice(2)}`,
+      start: start - 2,
+      end: end - 2
+    };
+  }
+
+  const cleanedSelection = selected.replace(/\*\*/g, "");
+
+  return {
+    value: `${before}${cleanedSelection}${after}`,
+    start,
+    end: start + cleanedSelection.length
+  };
 }
 
 function upsertLocalProduct(
@@ -2942,7 +3110,11 @@ function parseRawLabelText(
       }
     }
 
-    if (importerText && !languageContent.importer?.trim()) {
+    if (
+      importerText &&
+      languageSegments.length <= 1 &&
+      !languageContent.importer?.trim()
+    ) {
       languageContent.importer = mergeDetectedText(
         languageContent.importer,
         importerText
@@ -3513,7 +3685,9 @@ function inferRawSectionsFromSegment(
     /\b(Kühl und trocken lagern\.[\s\S]*?)(?=\s*(?:Hergestellt|Importiert|$))/i,
     /\b(Store in a cool,\s*dry place\.[\s\S]*?)(?=\s*(?:Made in|Imported by|$))/i,
     /\b(Conservar en un lugar fresco y seco\.[\s\S]*?)(?=\s*(?:Producido|Importado|$))/i,
-    /\b(Conservar en lugar fresco y seco\.[\s\S]*?)(?=\s*(?:Producido|Importado|$))/i
+    /\b(Conservar en lugar fresco y seco\.[\s\S]*?)(?=\s*(?:Producido|Importado|$))/i,
+    /\b(À conserver dans un endroit frais et sec\.[\s\S]*?)(?=\s*(?:Produit|Fabriqué|Fabrique|Importé|Importe|$))/i,
+    /\b(A conserver dans un endroit frais et sec\.[\s\S]*?)(?=\s*(?:Produit|Fabrique|Importe|$))/i
   ]);
   const origin = firstRawPatternBody(segment, [
     /\b(Hergestellt in Mexiko)\b/i,
@@ -3521,10 +3695,13 @@ function inferRawSectionsFromSegment(
     /\b(Producido en México)\b/i,
     /\b(Producido en Mexico)\b/i,
     /\b(Hecho en México)\b/i,
-    /\b(Hecho en Mexico)\b/i
+    /\b(Hecho en Mexico)\b/i,
+    /\b(Produit en Mexique)\b/i,
+    /\b(Fabriqué au Mexique)\b/i,
+    /\b(Fabrique au Mexique)\b/i
   ]);
   const importer = firstRawPatternBody(segment, [
-    /\b(?:Importiert durch|Imported by|Importado por)\s*:?\s*([\s\S]*?)$/i
+    /\b(?:Importiert durch|Imported by|Importado por|Importé par|Importe par)\s*:?\s*([\s\S]*?)$/i
   ]);
 
   if (conservation) {
@@ -3606,7 +3783,7 @@ function removeRawNutritionBlock(text: string): string {
   const before = text.slice(0, marker).trim();
   const after = text.slice(marker);
   const nextSemanticMarker = after.search(
-    /\b(?:Imported by|Importado por|Importiert von|Importer|Importeur|BBD|LOT|Product From|Product of|Made in|Hecho en|Hergestellt)\b/i
+    /\b(?:Kühl und trocken lagern|Store in a cool|Conservar en|À conserver|A conserver|Imported by|Importado por|Importiert von|Importiert durch|Importer|Importeur|Importé par|Importe par|BBD|LOT|Product From|Product of|Made in|Hecho en|Hergestellt|Produit en|Fabriqué|Fabrique)\b/i
   );
 
   if (nextSemanticMarker > 0) {
@@ -3621,6 +3798,14 @@ function cleanRawSectionBody(key: RawSectionKey, value: string): string {
 
   if (key === "ingredients") {
     cleaned = cleaned
+      .replace(
+        /\b(?:Nährwert|Naehrwert|Información nutricional|Informacion nutricional|Nutrition|Valeurs|Voedingswaarde|Valores por|Werte je)\b[\s\S]*$/i,
+        " "
+      )
+      .replace(
+        /\b(?:Kühl und trocken lagern|Store in a cool|Conservar en|À conserver|A conserver|Hergestellt in|Made in|Producido en|Hecho en|Produit en|Fabriqué|Fabrique|Importiert durch|Importiert von|Imported by|Importado por|Importé par|Importe par)\b[\s\S]*$/i,
+        " "
+      )
       .replace(/\bServing\s+Size\b[\s\S]*$/i, " ")
       .replace(/\bServing\s+per\s+Package\b[\s\S]*$/i, " ");
   }

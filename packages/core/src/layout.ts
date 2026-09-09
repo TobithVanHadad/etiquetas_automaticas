@@ -260,10 +260,16 @@ function chooseColumns(languageCount: number, widthMm: number): number {
 
 function createHeaderText(
   product: ProductRecord,
+  languages: LanguageCode[],
   primaryContent?: ProductLanguageContent
 ): string {
-  const baseTitle = normalizeHeaderTitle(product.name || primaryContent?.name || "");
   const netWeight = normalizeHeaderTitle(product.netWeight ?? "");
+  const selectedLanguageTitles = languages
+    .map((language) => product.languages[language]?.name)
+    .filter((value): value is string => Boolean(value?.trim()));
+  const baseTitle = selectedLanguageTitles.length
+    ? combineHeaderTitles(selectedLanguageTitles, netWeight)
+    : normalizeHeaderTitle(product.name || primaryContent?.name || "");
 
   if (!baseTitle) {
     return netWeight ? `${netWeight} e` : "";
@@ -276,6 +282,24 @@ function createHeaderText(
   return `${baseTitle} - ${netWeight} e`;
 }
 
+function combineHeaderTitles(titles: string[], netWeight: string): string {
+  const uniqueTitles = titles.reduce<string[]>((accumulator, title) => {
+    const cleanTitle = stripHeaderNetWeight(title, netWeight);
+    const normalized = normalizeHeaderTitle(cleanTitle).toLowerCase();
+    const exists = accumulator.some(
+      (candidate) => normalizeHeaderTitle(candidate).toLowerCase() === normalized
+    );
+
+    if (cleanTitle && !exists) {
+      accumulator.push(cleanTitle);
+    }
+
+    return accumulator;
+  }, []);
+
+  return normalizeHeaderTitle(uniqueTitles.join(" / "));
+}
+
 function normalizeHeaderTitle(value: string): string {
   return value
     .replace(/\s*\n+\s*/g, " / ")
@@ -283,6 +307,33 @@ function normalizeHeaderTitle(value: string): string {
     .replace(/\s+/g, " ")
     .replace(/\s+([,.;:])/g, "$1")
     .trim();
+}
+
+function stripHeaderNetWeight(title: string, netWeight: string): string {
+  const cleanTitle = normalizeHeaderTitle(title);
+
+  if (!netWeight) {
+    return cleanTitle;
+  }
+
+  const match = netWeight.match(/^(\d+(?:[.,]\d+)?)\s*(g|kg|ml|l)$/i);
+
+  if (!match) {
+    return normalizeHeaderTitle(
+      cleanTitle.replace(
+        new RegExp(`${escapeRegExp(netWeight)}\\s*(?:e|℮)?`, "i"),
+        ""
+      )
+    );
+  }
+
+  const [, quantity, unit] = match;
+  const weightPattern = new RegExp(
+    `\\s*[-–]?\\s*${escapeRegExp(quantity)}\\s*${escapeRegExp(unit)}\\s*(?:e|℮)?\\s*$`,
+    "i"
+  );
+
+  return normalizeHeaderTitle(cleanTitle.replace(weightPattern, ""));
 }
 
 function headerContainsNetWeight(title: string, netWeight: string): boolean {
@@ -319,7 +370,7 @@ function buildLayoutCandidate(
   const compactPreset = isCompactVisualPreset(label);
   const primaryLanguage = languages[0] ?? "EN";
   const primaryContent = product.languages[primaryLanguage];
-  const headerText = createHeaderText(product, primaryContent);
+  const headerText = createHeaderText(product, languages, primaryContent);
   const headerScale = clampPercent(label.headerTextScalePercent, 75, 180) / 100;
   const headerFontMm = Math.max(
     (compactPreset ? 2.25 : 2.15) * headerScale,
@@ -401,52 +452,84 @@ function buildLayoutCandidate(
     });
   }
 
-  const columns = createColumns(strategy, label, bodyTopMm, bodyBottomMm);
-
-  languages.forEach((language, index) => {
-    const column = columns.reduce((bestColumn, candidateColumn) =>
-      candidateColumn.cursorY < bestColumn.cursorY ? candidateColumn : bestColumn
+  if (compactPreset) {
+    const compactText = createCompactMultilingualBodyText(product, languages);
+    const compactLineHeight = 1.05;
+    const compactHeight = measureRichTextHeightMm(
+      compactText,
+      contentWidth,
+      strategy.bodyFontMm,
+      compactLineHeight
     );
-    const content = product.languages[language] ?? {};
-    const block = createLanguageBlock(
-      product,
-      language,
-      content,
-      column.x,
-      column.cursorY,
-      column.width,
-      strategy,
-      label
-    );
-    const blockBottom = block.yMm + block.heightMm;
+    const compactBottom = bodyTopMm + compactHeight;
+    const compactElement = {
+      kind: "text" as const,
+      id: "language-compact-body",
+      role: "language-body",
+      xMm: strategy.marginMm,
+      yMm: bodyTopMm,
+      widthMm: contentWidth,
+      heightMm: compactHeight,
+      fontMm: strategy.bodyFontMm,
+      lineHeight: compactLineHeight,
+      text: compactText,
+      overflow: compactBottom > bodyBottomMm
+    };
 
-    if (blockBottom > bodyBottomMm) {
+    if (compactBottom > bodyBottomMm) {
       overflow = true;
-      overflowAreaMm2 += (blockBottom - bodyBottomMm) * column.width;
-      block.elements.forEach((element) => {
-        element.overflow = true;
-      });
+      overflowAreaMm2 += (compactBottom - bodyBottomMm) * contentWidth;
     }
 
-    elements.push(...block.elements);
+    elements.push(compactElement);
+  } else {
+    const columns = createColumns(strategy, label, bodyTopMm, bodyBottomMm);
 
-    if (!compactPreset && index < languages.length - 1) {
-      elements.push({
-        kind: "line",
-        id: `language-separator-${language}-${index}`,
-        role: "language-separator",
-        xMm: column.x,
-        yMm: blockBottom + strategy.spacingMm / 2,
-        widthMm: column.width,
-        heightMm: 0,
-        thicknessMm: 0.15,
-        direction: "horizontal",
-        overflow: blockBottom > bodyBottomMm
-      });
-    }
+    languages.forEach((language, index) => {
+      const column = columns.reduce((bestColumn, candidateColumn) =>
+        candidateColumn.cursorY < bestColumn.cursorY ? candidateColumn : bestColumn
+      );
+      const content = product.languages[language] ?? {};
+      const block = createLanguageBlock(
+        product,
+        language,
+        content,
+        column.x,
+        column.cursorY,
+        column.width,
+        strategy,
+        label
+      );
+      const blockBottom = block.yMm + block.heightMm;
 
-    column.cursorY = blockBottom + strategy.spacingMm;
-  });
+      if (blockBottom > bodyBottomMm) {
+        overflow = true;
+        overflowAreaMm2 += (blockBottom - bodyBottomMm) * column.width;
+        block.elements.forEach((element) => {
+          element.overflow = true;
+        });
+      }
+
+      elements.push(...block.elements);
+
+      if (index < languages.length - 1) {
+        elements.push({
+          kind: "line",
+          id: `language-separator-${language}-${index}`,
+          role: "language-separator",
+          xMm: column.x,
+          yMm: blockBottom + strategy.spacingMm / 2,
+          widthMm: column.width,
+          heightMm: 0,
+          thicknessMm: 0.15,
+          direction: "horizontal",
+          overflow: blockBottom > bodyBottomMm
+        });
+      }
+
+      column.cursorY = blockBottom + strategy.spacingMm;
+    });
+  }
 
   const table = createNutritionTableElement(
     product,
@@ -534,6 +617,90 @@ function createColumns(
     width: columnWidth,
     cursorY: bodyTopMm + Math.max(0, bodyBottomMm - bodyTopMm) * 0
   }));
+}
+
+type CompactSectionKey =
+  | "ingredients"
+  | "warnings"
+  | "conservation"
+  | "origin"
+  | "importer";
+
+const COMPACT_SECTION_ORDER: CompactSectionKey[] = [
+  "ingredients",
+  "warnings",
+  "conservation",
+  "origin",
+  "importer"
+];
+
+function createCompactMultilingualBodyText(
+  product: ProductRecord,
+  languages: LanguageCode[]
+): string {
+  const sectionRows = COMPACT_SECTION_ORDER.map((sectionKey) =>
+    createCompactSectionRow(product, languages, sectionKey)
+  ).filter(Boolean);
+  const customRows = createCompactCustomSectionRows(product, languages);
+
+  return [...sectionRows, ...customRows].join("\n");
+}
+
+function createCompactSectionRow(
+  product: ProductRecord,
+  languages: LanguageCode[],
+  sectionKey: CompactSectionKey
+): string {
+  return languages
+    .map((language) => {
+      const content = product.languages[language] ?? {};
+      const value =
+        sectionKey === "origin"
+          ? content.origin || product.countryOfOrigin
+          : content[sectionKey];
+
+      if (!value?.trim()) {
+        return "";
+      }
+
+      return `**(${language}) ${SECTION_LABELS[language][sectionKey]}:** ${value.trim()}`;
+    })
+    .filter(Boolean)
+    .join(" / ");
+}
+
+function createCompactCustomSectionRows(
+  product: ProductRecord,
+  languages: LanguageCode[]
+): string[] {
+  const maxCustomSections = Math.max(
+    0,
+    ...languages.map(
+      (language) => product.languages[language]?.customSections?.length ?? 0
+    )
+  );
+
+  return Array.from({ length: maxCustomSections }, (_, index) =>
+    languages
+      .map((language) => {
+        const section = product.languages[language]?.customSections?.[index];
+
+        if (!section?.body?.trim() && !section?.title?.trim()) {
+          return "";
+        }
+
+        const title = section.title?.trim();
+        const body = section.body?.trim();
+
+        if (title && body) {
+          return `**(${language}) ${title}:** ${body}`;
+        }
+
+        return `**(${language})** ${body || title}`;
+      })
+      .filter(Boolean)
+      .join(" / ")
+  ).filter(Boolean);
 }
 
 function createLanguageBlock(
