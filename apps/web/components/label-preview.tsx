@@ -12,10 +12,12 @@ const CSS_PX_PER_MM = 3.7795275591;
 
 export function LabelPreview({
   layout,
-  zoom
+  zoom,
+  onTextSelection
 }: {
   layout: LayoutResult;
   zoom: number;
+  onTextSelection?: (selection: string) => void;
 }) {
   const widthPx = layout.label.widthMm * CSS_PX_PER_MM;
   const heightPx = layout.label.heightMm * CSS_PX_PER_MM;
@@ -24,6 +26,13 @@ export function LabelPreview({
     <div
       className="relative overflow-auto rounded border border-zinc-300 bg-zinc-100 p-5"
       style={{ minHeight: 520 }}
+      onMouseUp={() => {
+        const selection = window.getSelection()?.toString().trim();
+
+        if (selection) {
+          onTextSelection?.(selection);
+        }
+      }}
     >
       <div
         className="relative"

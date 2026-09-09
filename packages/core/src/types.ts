@@ -103,6 +103,8 @@ export interface LabelSpec {
   zplFontRegular?: string;
   zplFontBold?: string;
   visualPreset?: "crevel-current" | "industrial-plain" | "poblano-import";
+  headerTextScalePercent?: number;
+  bodyTextScalePercent?: number;
   nutritionTableWidthPercent?: number;
   nutritionTableAlign?: "left" | "center" | "right" | "full";
   nutritionValueColumnPercent?: number;

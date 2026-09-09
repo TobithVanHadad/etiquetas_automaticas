@@ -78,6 +78,8 @@ function normalizeLabelSpec(label: LabelSpec): Required<LabelSpec> {
     zplFontRegular: label.zplFontRegular ?? "E:ARIAL.TTF",
     zplFontBold: label.zplFontBold ?? "E:ARIALBD.TTF",
     visualPreset: label.visualPreset ?? "crevel-current",
+    headerTextScalePercent: label.headerTextScalePercent ?? 100,
+    bodyTextScalePercent: label.bodyTextScalePercent ?? 100,
     nutritionTableWidthPercent: label.nutritionTableWidthPercent ?? 64,
     nutritionTableAlign: label.nutritionTableAlign ?? "right",
     nutritionValueColumnPercent: label.nutritionValueColumnPercent ?? 25,
@@ -127,25 +129,37 @@ function createStrategyAttempts(
     2
   ]).filter((margin) => margin >= 2);
   const minimumFontMm = getMinimumTextHeightMm(label.fontFamily);
+  const bodyFontScale = clampPercent(label.bodyTextScalePercent, 75, 180) / 100;
   const tableFontScale =
     clampPercent(label.nutritionTableFontScalePercent, 75, 130) / 100;
-  const preferredBodyFontMm =
-    label.fontFamily === "zebra" ? MIN_TEXT_HEIGHT_MM * 2 : minimumFontMm;
+  const preferredBodyBaseMm =
+    label.fontFamily === "zebra" ? MIN_TEXT_HEIGHT_MM * 2.15 : minimumFontMm + 0.28;
+  const preferredBodyFontMm = clampToIndustrialMinimum(
+    preferredBodyBaseMm * bodyFontScale,
+    minimumFontMm
+  );
   const preferredTableFontMm =
     (label.fontFamily === "zebra" ? MIN_TEXT_HEIGHT_MM * 1.85 : minimumFontMm) *
     tableFontScale;
   const bodyFonts =
     label.fontFamily === "zebra"
-      ? [
+      ? uniqueNumbers([
           preferredBodyFontMm,
+          preferredBodyFontMm * 0.94,
+          preferredBodyFontMm * 0.88,
           2.25,
           2,
           1.8,
           1.6,
           1.4,
           MIN_TEXT_HEIGHT_MM
-        ]
-      : [minimumFontMm + 0.25, minimumFontMm + 0.12, minimumFontMm];
+        ]).map((fontMm) => clampToIndustrialMinimum(fontMm, minimumFontMm))
+      : uniqueNumbers([
+          preferredBodyFontMm,
+          preferredBodyFontMm * 0.94,
+          minimumFontMm + 0.12,
+          minimumFontMm
+        ]).map((fontMm) => clampToIndustrialMinimum(fontMm, minimumFontMm));
   const tableFonts =
     label.fontFamily === "zebra"
       ? [
@@ -244,6 +258,53 @@ function chooseColumns(languageCount: number, widthMm: number): number {
   return widthMm >= 110 ? 4 : 3;
 }
 
+function createHeaderText(
+  product: ProductRecord,
+  primaryContent?: ProductLanguageContent
+): string {
+  const baseTitle = normalizeHeaderTitle(product.name || primaryContent?.name || "");
+  const netWeight = normalizeHeaderTitle(product.netWeight ?? "");
+
+  if (!baseTitle) {
+    return netWeight ? `${netWeight} e` : "";
+  }
+
+  if (!netWeight || headerContainsNetWeight(baseTitle, netWeight)) {
+    return baseTitle;
+  }
+
+  return `${baseTitle} - ${netWeight} e`;
+}
+
+function normalizeHeaderTitle(value: string): string {
+  return value
+    .replace(/\s*\n+\s*/g, " / ")
+    .replace(/\s*\/\s*/g, " / ")
+    .replace(/\s+/g, " ")
+    .replace(/\s+([,.;:])/g, "$1")
+    .trim();
+}
+
+function headerContainsNetWeight(title: string, netWeight: string): boolean {
+  const match = netWeight.match(/^(\d+(?:[.,]\d+)?)\s*(g|kg|ml|l)$/i);
+
+  if (!match) {
+    return title.toLowerCase().includes(netWeight.toLowerCase());
+  }
+
+  const [, quantity, unit] = match;
+  const pattern = new RegExp(
+    `\\b${escapeRegExp(quantity)}\\s*${escapeRegExp(unit)}\\s*(?:e|℮)?\\b`,
+    "i"
+  );
+
+  return pattern.test(title);
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 function buildLayoutCandidate(
   product: ProductRecord,
   languages: LanguageCode[],
@@ -258,9 +319,19 @@ function buildLayoutCandidate(
   const compactPreset = isCompactVisualPreset(label);
   const primaryLanguage = languages[0] ?? "EN";
   const primaryContent = product.languages[primaryLanguage];
-  const headerText = product.name || primaryContent?.name || "";
-  const headerFontMm = Math.max(compactPreset ? 2.25 : 2.15, minimumFontMm);
+  const headerText = createHeaderText(product, primaryContent);
+  const headerScale = clampPercent(label.headerTextScalePercent, 75, 180) / 100;
+  const headerFontMm = Math.max(
+    (compactPreset ? 2.25 : 2.15) * headerScale,
+    minimumFontMm
+  );
   const headerLineHeight = compactPreset ? 0.98 : 1.08;
+  const skuText = product.sku?.trim() ? `SKU: ${product.sku.trim()}` : "";
+  const skuFontMm = Math.max(minimumFontMm, headerFontMm * 0.58);
+  const skuHeightMm = skuText
+    ? measureRichTextHeightMm(skuText, contentWidth, skuFontMm, 1) + 0.12
+    : 0;
+  const headerYMm = strategy.marginMm + (skuText ? skuHeightMm + 0.2 : 0);
   const measuredHeaderHeightMm =
     measureRichTextHeightMm(headerText, contentWidth, headerFontMm, headerLineHeight) +
     0.45;
@@ -268,6 +339,7 @@ function buildLayoutCandidate(
     compactPreset ? 4.3 : 6.2,
     Math.min(label.heightMm * 0.16, measuredHeaderHeightMm)
   );
+  const headerBlockHeightMm = skuHeightMm + (skuText ? 0.2 : 0) + headerHeightMm;
   const nutritionHeightMm = calculateNutritionHeight(
     product,
     languages,
@@ -275,7 +347,7 @@ function buildLayoutCandidate(
     nutritionWidthMm,
     label
   );
-  const bodyTopMm = strategy.marginMm + headerHeightMm;
+  const bodyTopMm = strategy.marginMm + headerBlockHeightMm;
   const tableTopMm =
     label.heightMm -
     strategy.marginMm -
@@ -285,12 +357,28 @@ function buildLayoutCandidate(
   let overflow = false;
   let overflowAreaMm2 = 0;
 
+  if (skuText) {
+    elements.push({
+      kind: "text",
+      id: "header-sku",
+      role: "sku",
+      xMm: strategy.marginMm,
+      yMm: strategy.marginMm,
+      widthMm: contentWidth,
+      heightMm: skuHeightMm,
+      fontMm: skuFontMm,
+      lineHeight: 1,
+      weight: "bold",
+      text: skuText
+    });
+  }
+
   elements.push({
     kind: "text",
     id: "header-product-name",
     role: "product-name",
     xMm: strategy.marginMm,
-    yMm: strategy.marginMm,
+    yMm: headerYMm,
     widthMm: contentWidth,
     heightMm: headerHeightMm,
     fontMm: headerFontMm,
@@ -305,7 +393,7 @@ function buildLayoutCandidate(
       id: "header-divider",
       role: "divider",
       xMm: strategy.marginMm,
-      yMm: strategy.marginMm + headerHeightMm - 1,
+      yMm: strategy.marginMm + headerBlockHeightMm - 1,
       widthMm: contentWidth,
       heightMm: 0,
       thicknessMm: 0.25,
@@ -542,6 +630,33 @@ function createLanguageBodyText(
   inlineLanguageHeading = false
 ): string {
   const labels = SECTION_LABELS[language];
+
+  if (inlineLanguageHeading) {
+    const bodyParts: string[] = [];
+
+    if (content.ingredients?.trim()) {
+      bodyParts.push(`**(${language}) ${labels.ingredients}:** ${content.ingredients}`);
+    } else {
+      bodyParts.push(`**(${language})**`);
+    }
+
+    [
+      content.warnings,
+      content.conservation,
+      content.origin || product.countryOfOrigin,
+      content.importer,
+      ...(content.customSections ?? []).map((section) =>
+        section.body?.trim() ? section.body : section.title
+      )
+    ].forEach((value) => {
+      if (value?.trim()) {
+        bodyParts.push(value.trim());
+      }
+    });
+
+    return bodyParts.join(" ");
+  }
+
   const sections = [
     content.ingredients
       ? { title: labels.ingredients, body: content.ingredients }
@@ -561,20 +676,11 @@ function createLanguageBodyText(
     .filter(Boolean)
     .map((section) => section as { title: string; body: string });
 
-  if (!sections.length) {
-    return inlineLanguageHeading ? `**(${language})**` : "";
-  }
+  if (!sections.length) return "";
 
   return sections
-    .map((section, index) => {
-      const title =
-        inlineLanguageHeading && index === 0
-          ? `(${language}) ${section.title}`
-          : section.title;
-
-      return `**${title}:** ${section.body}`;
-    })
-    .join(inlineLanguageHeading ? " " : "\n");
+    .map((section) => `**${section.title}:** ${section.body}`)
+    .join("\n");
 }
 
 function calculateNutritionHeight(

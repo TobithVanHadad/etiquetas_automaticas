@@ -39,6 +39,7 @@ import {
 import { LabelPreview } from "./label-preview";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
+const LOCAL_PRINT_BRIDGE_URL = "http://127.0.0.1:4000";
 const LABEL_ATTACHMENT_ACCEPT =
   ".pdf,.nlbl,.btw,image/png,image/jpeg,image/webp,image/gif";
 const MAX_LABEL_ATTACHMENT_BYTES = 15 * 1024 * 1024;
@@ -65,6 +66,17 @@ type PrinterProfile = (typeof PRINTER_PROFILES)[number];
 type WorkbenchNotice = {
   tone: "success" | "error" | "info";
   message: string;
+};
+
+type PrintPayload = {
+  queued?: boolean;
+  dryRun?: boolean;
+  reason?: string;
+  error?: string;
+  printer?: string;
+  zpl?: string;
+  source?: string;
+  [key: string]: unknown;
 };
 
 type RawImportResult = {
@@ -107,6 +119,8 @@ export function IndustrialLabelWorkbench() {
     zplFontRegular: "E:ARIAL.TTF",
     zplFontBold: "E:ARIALBD.TTF",
     visualPreset: "crevel-current",
+    headerTextScalePercent: 100,
+    bodyTextScalePercent: 100,
     nutritionTableWidthPercent: 64,
     nutritionTableAlign: "right",
     nutritionValueColumnPercent: 25,
@@ -121,6 +135,7 @@ export function IndustrialLabelWorkbench() {
   const [exportText, setExportText] = useState("");
   const [rawText, setRawText] = useState("");
   const rawTextareaRef = useRef<HTMLTextAreaElement>(null);
+  const [previewSelection, setPreviewSelection] = useState("");
   const [rawImportResult, setRawImportResult] = useState<RawImportResult | null>(
     null
   );
@@ -394,25 +409,115 @@ export function IndustrialLabelWorkbench() {
       return;
     }
 
+    setNotice({
+      tone: "info",
+      message: `Enviando etiqueta a ${selectedPrinterProfile.printerName}...`
+    });
+
+    const fallbackZpl = generateZpl(layout);
+
     try {
-      const response = await fetch(`${API_URL}/print/zebra`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          product: cleanProduct(product),
-          languages,
-          label,
-          printer: { name: selectedPrinterProfile.printerName },
-          dryRun: false
-        })
-      });
-      const payload = await response.json();
+      let payload = await sendCurrentPrintJob(API_URL);
+
+      if (
+        !payload.queued &&
+        isCloudPrintUnavailable(payload) &&
+        !isLocalApiUrl(API_URL)
+      ) {
+        setNotice({
+          tone: "info",
+          message:
+            "Railway genero el ZPL, pero la impresion fisica requiere el equipo conectado. Intentando puente local en 127.0.0.1:4000..."
+        });
+
+        try {
+          const localPayload = await sendCurrentPrintJob(LOCAL_PRINT_BRIDGE_URL);
+          payload = {
+            ...localPayload,
+            cloudReason: payload.reason
+          };
+        } catch (localError) {
+          setExportText(
+            JSON.stringify(
+              {
+                queued: false,
+                printer: selectedPrinterProfile.printerName,
+                reason:
+                  "No se encontro el puente local de impresion en 127.0.0.1:4000. Abra la API en la computadora conectada a la Zebra o use el ZPL generado.",
+                localError: String(localError),
+                cloudReason: payload.reason,
+                zpl: fallbackZpl
+              },
+              null,
+              2
+            )
+          );
+          setNotice({
+            tone: "error",
+            message:
+              "No se pudo mandar fisicamente a la Zebra porque no hay puente local activo en esta computadora. Deje el ZPL listo en el panel de exportacion."
+          });
+          setApiStatus("online");
+          return;
+        }
+      }
+
       setExportText(JSON.stringify(payload, null, 2));
       setApiStatus("online");
+
+      setNotice({
+        tone: payload.queued ? "success" : "error",
+        message: payload.queued
+          ? `Etiqueta enviada a ${payload.printer ?? selectedPrinterProfile.printerName}.`
+          : payload.reason ??
+            "La API genero ZPL, pero no confirmo que se haya enviado a la impresora."
+      });
     } catch (error) {
       setApiStatus("offline");
-      setExportText(String(error));
+      setExportText(
+        JSON.stringify(
+          {
+            queued: false,
+            printer: selectedPrinterProfile.printerName,
+            error: String(error),
+            zpl: fallbackZpl
+          },
+          null,
+          2
+        )
+      );
+      setNotice({
+        tone: "error",
+        message: `No se pudo contactar el servicio de impresion: ${String(error)}`
+      });
     }
+  }
+
+  async function sendCurrentPrintJob(apiUrl: string): Promise<PrintPayload> {
+    const response = await fetch(`${apiUrl}/print/zebra`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        product: cleanProduct(product),
+        languages,
+        label,
+        printer: { name: selectedPrinterProfile.printerName },
+        dryRun: false
+      })
+    });
+    const payloadText = await response.text();
+    const payload = parsePrintPayload(payloadText);
+
+    if (!response.ok) {
+      throw new Error(
+        payload.reason || payload.error || `HTTP ${response.status}`
+      );
+    }
+
+    return {
+      ...payload,
+      source: apiUrl
+    };
   }
 
   function updateNutritionRow(index: number, next: Partial<NutritionRow>) {
@@ -715,6 +820,33 @@ export function IndustrialLabelWorkbench() {
       } else {
         textarea.setSelectionRange(start + 2, start + 2);
       }
+    });
+  }
+
+  function applyPreviewSelectionBold() {
+    const selection = previewSelection.trim();
+
+    if (!selection) {
+      return;
+    }
+
+    const result = boldSelectionInProduct(product, selection);
+
+    if (!result.changed) {
+      setNotice({
+        tone: "error",
+        message:
+          "No encontre ese texto exacto en los campos editables. Pruebe seleccionando una palabra o frase mas corta."
+      });
+      return;
+    }
+
+    setProduct(result.product);
+    setProducts((current) => upsertLocalProduct(current, result.product));
+    setPreviewSelection("");
+    setNotice({
+      tone: "success",
+      message: `Negrita aplicada a "${truncatePreviewSelection(selection)}".`
     });
   }
 
@@ -1173,6 +1305,32 @@ export function IndustrialLabelWorkbench() {
                 <option value="industrial-plain">Industrial plano</option>
               </select>
             </Field>
+            <div className="grid grid-cols-2 gap-2">
+              <PercentStepper
+                label="Titulo %"
+                value={label.headerTextScalePercent}
+                min={75}
+                max={180}
+                onChange={(headerTextScalePercent) =>
+                  setLabel((current) => ({
+                    ...current,
+                    headerTextScalePercent
+                  }))
+                }
+              />
+              <PercentStepper
+                label="Texto %"
+                value={label.bodyTextScalePercent}
+                min={75}
+                max={180}
+                onChange={(bodyTextScalePercent) =>
+                  setLabel((current) => ({
+                    ...current,
+                    bodyTextScalePercent
+                  }))
+                }
+              />
+            </div>
             {label.fontFamily === "arial" ? (
               <div className="grid grid-cols-2 gap-2">
                 <Field label="Arial normal">
@@ -1358,6 +1516,19 @@ export function IndustrialLabelWorkbench() {
               </p>
             </div>
             <div className="flex items-center gap-2">
+              {previewSelection ? (
+                <button
+                  type="button"
+                  onClick={applyPreviewSelectionBold}
+                  className="inline-flex min-h-8 max-w-56 items-center gap-1 rounded border border-emerald-700 bg-emerald-50 px-2 text-xs font-semibold text-emerald-900 hover:bg-emerald-100"
+                  title={`Poner en negrita: ${previewSelection}`}
+                >
+                  <Bold size={14} />
+                  <span className="truncate">
+                    Negrita: {truncatePreviewSelection(previewSelection)}
+                  </span>
+                </button>
+              ) : null}
               <IconButton
                 label="Reducir zoom"
                 onClick={() => setZoom((current) => Math.max(0.35, current - 0.1))}
@@ -1392,7 +1563,11 @@ export function IndustrialLabelWorkbench() {
           )}
 
           <div className="min-h-0 flex-1 overflow-auto">
-            <LabelPreview layout={layout} zoom={zoom} />
+            <LabelPreview
+              layout={layout}
+              zoom={zoom}
+              onTextSelection={setPreviewSelection}
+            />
           </div>
         </section>
 
@@ -1753,6 +1928,58 @@ function NumberField({
   );
 }
 
+function PercentStepper({
+  label,
+  value,
+  min,
+  max,
+  onChange
+}: {
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  onChange: (value: number) => void;
+}) {
+  const normalizedValue = clampPercentSetting(value, min, max);
+
+  return (
+    <Field label={label}>
+      <div className="grid grid-cols-[32px_1fr_32px] overflow-hidden rounded border border-zinc-300 bg-white">
+        <button
+          type="button"
+          onClick={() => onChange(clampPercentSetting(normalizedValue - 5, min, max))}
+          className="inline-flex items-center justify-center border-r border-zinc-200 text-zinc-700 hover:bg-zinc-50"
+          title={`Bajar ${label}`}
+          aria-label={`Bajar ${label}`}
+        >
+          <Minus size={14} />
+        </button>
+        <input
+          type="number"
+          min={min}
+          max={max}
+          step={5}
+          value={normalizedValue}
+          onChange={(event) =>
+            onChange(clampPercentSetting(Number(event.target.value), min, max))
+          }
+          className="min-w-0 px-2 py-1.5 text-center text-sm outline-none"
+        />
+        <button
+          type="button"
+          onClick={() => onChange(clampPercentSetting(normalizedValue + 5, min, max))}
+          className="inline-flex items-center justify-center border-l border-zinc-200 text-zinc-700 hover:bg-zinc-50"
+          title={`Subir ${label}`}
+          aria-label={`Subir ${label}`}
+        >
+          <Plus size={14} />
+        </button>
+      </div>
+    </Field>
+  );
+}
+
 function TextAreaField({
   label,
   value,
@@ -1871,6 +2098,143 @@ function ActionButton({
   );
 }
 
+function parsePrintPayload(text: string): PrintPayload {
+  if (!text.trim()) {
+    return {};
+  }
+
+  try {
+    return JSON.parse(text) as PrintPayload;
+  } catch {
+    return { error: text };
+  }
+}
+
+function isLocalApiUrl(url: string): boolean {
+  return /^https?:\/\/(?:localhost|127\.0\.0\.1)(?::\d+)?/i.test(url);
+}
+
+function isCloudPrintUnavailable(payload: PrintPayload): boolean {
+  const reason = `${payload.reason ?? ""} ${payload.error ?? ""}`.toLowerCase();
+
+  return (
+    !payload.queued &&
+    (reason.includes("railway") ||
+      reason.includes("windows") ||
+      reason.includes("impresion fisica") ||
+      reason.includes("equipo conectado"))
+  );
+}
+
+function clampPercentSetting(value: number, min: number, max: number): number {
+  if (!Number.isFinite(value)) {
+    return min;
+  }
+
+  return Math.min(max, Math.max(min, Math.round(value)));
+}
+
+function truncatePreviewSelection(value: string): string {
+  const compact = value.replace(/\s+/g, " ").trim();
+
+  return compact.length > 28 ? `${compact.slice(0, 27)}...` : compact;
+}
+
+function boldSelectionInProduct(
+  product: ProductRecord,
+  selection: string
+): { product: ProductRecord; changed: boolean } {
+  let changed = false;
+  const bold = (value?: string): string | undefined => {
+    const next = boldSelectionInText(value, selection);
+
+    if (next !== value) {
+      changed = true;
+    }
+
+    return next;
+  };
+  const nextLanguages = Object.fromEntries(
+    Object.entries(product.languages).map(([language, content]) => {
+      if (!content) {
+        return [language, content];
+      }
+
+      return [
+        language,
+        {
+          ...content,
+          name: bold(content.name),
+          ingredients: bold(content.ingredients),
+          warnings: bold(content.warnings),
+          conservation: bold(content.conservation),
+          origin: bold(content.origin),
+          importer: bold(content.importer),
+          customSections: content.customSections?.map((section) => ({
+            title: bold(section.title) ?? section.title,
+            body: bold(section.body) ?? section.body
+          }))
+        }
+      ];
+    })
+  ) as ProductRecord["languages"];
+  const nextRows = product.nutrition.rows.map((row) => {
+    const nextLabels = { ...row.label };
+
+    (Object.keys(nextLabels) as LanguageCode[]).forEach((language) => {
+      const nextLabel = bold(nextLabels[language]);
+
+      if (nextLabel) {
+        nextLabels[language] = nextLabel;
+      }
+    });
+
+    return {
+      ...row,
+      label: nextLabels
+    };
+  });
+
+  if (!changed) {
+    return { product, changed: false };
+  }
+
+  return {
+    product: withDefaultProductMetadata({
+      ...product,
+      name: bold(product.name) ?? product.name,
+      languages: nextLanguages,
+      nutrition: {
+        ...product.nutrition,
+        rows: nextRows
+      }
+    }),
+    changed: true
+  };
+}
+
+function boldSelectionInText(value: string | undefined, selection: string): string | undefined {
+  if (!value || !selection.trim()) {
+    return value;
+  }
+
+  const index = value.toLocaleLowerCase().indexOf(selection.toLocaleLowerCase());
+
+  if (index < 0) {
+    return value;
+  }
+
+  const end = index + selection.length;
+  const alreadyBold = value.slice(Math.max(0, index - 2), index) === "**" &&
+    value.slice(end, end + 2) === "**";
+
+  if (alreadyBold) {
+    return value;
+  }
+
+  return `${value.slice(0, index)}**${value.slice(index, end)}**${value.slice(end)}`;
+}
+
 function upsertLocalProduct(
   products: ProductRecord[],
   product: ProductRecord
@@ -1927,6 +2291,8 @@ function serializeLabelSpec(label: Required<LabelSpec>): Record<string, unknown>
     zplFontRegular: label.zplFontRegular,
     zplFontBold: label.zplFontBold,
     visualPreset: label.visualPreset,
+    headerTextScalePercent: label.headerTextScalePercent,
+    bodyTextScalePercent: label.bodyTextScalePercent,
     nutritionTableWidthPercent: label.nutritionTableWidthPercent,
     nutritionTableAlign: label.nutritionTableAlign,
     nutritionValueColumnPercent: label.nutritionValueColumnPercent,
@@ -1983,6 +2349,12 @@ function parseSavedLabelSpec(value: Record<string, unknown>): Partial<LabelSpec>
     value.visualPreset === "industrial-plain"
   ) {
     label.visualPreset = value.visualPreset;
+  }
+  if (typeof value.headerTextScalePercent === "number") {
+    label.headerTextScalePercent = value.headerTextScalePercent;
+  }
+  if (typeof value.bodyTextScalePercent === "number") {
+    label.bodyTextScalePercent = value.bodyTextScalePercent;
   }
   if (typeof value.nutritionTableWidthPercent === "number") {
     label.nutritionTableWidthPercent = value.nutritionTableWidthPercent;
@@ -2525,7 +2897,8 @@ function parseRawLabelText(
   const segmentTitle = combineRawSegmentTitles(
     languageSegments
       .map((segment) => segment.title)
-      .filter((value): value is string => Boolean(value?.trim()))
+      .filter((value): value is string => Boolean(value?.trim())),
+    netWeight
   );
 
   if (segmentTitle) {
@@ -2651,9 +3024,9 @@ function matchRawValue(text: string, pattern: RegExp): string {
 
 function extractRawNetWeight(text: string): string {
   const match =
-    text.match(/\b(?:NET|Peso neto|Contenido neto)[:\s-]*(\d+(?:[.,]\d+)?)\s*(g|kg|ml|l)\s*e?\b/i) ??
-    text.match(/[-–]\s*(\d+(?:[.,]\d+)?)\s*(g|kg|ml|l)\s*e?\b/i) ??
-    text.match(/\b(\d+(?:[.,]\d+)?)\s*(g|kg|ml|l)\s*e\b/i);
+    text.match(/\b(?:NET|Peso neto|Contenido neto)[:\s-]*(\d+(?:[.,]\d+)?)\s*(g|kg|ml|l)\s*(?:e|℮)?(?=\s|$|[.;,)])/i) ??
+    text.match(/[-–]\s*(\d+(?:[.,]\d+)?)\s*(g|kg|ml|l)\s*(?:e|℮)?(?=\s|$|[.;,)])/i) ??
+    text.match(/\b(\d+(?:[.,]\d+)?)\s*(g|kg|ml|l)\s*(?:e|℮)(?=\s|$|[.;,)])/i);
 
   return match ? `${match[1]} ${match[2]}` : "";
 }
@@ -2752,7 +3125,7 @@ function stripRawHeaderMetadata(line: string): string {
     .replace(/\b(?:GTIN|EAN)[:#]?\s*\d{8,14}\b/gi, " ")
     .replace(/\bCR\s*\d+\b/gi, " ")
     .replace(/\bCR\d+\b/gi, " ")
-    .replace(/\b(?:NET|Peso neto|Contenido neto)[:\s-]*\d+(?:[.,]\d+)?\s*(?:g|kg|ml|l)\s*e?\b/gi, " ");
+    .replace(/\b(?:NET|Peso neto|Contenido neto)[:\s-]*\d+(?:[.,]\d+)?\s*(?:g|kg|ml|l)\s*(?:e|℮)?(?=\s|$|[.;,)])/gi, " ");
 }
 
 function isRawTitleCandidate(line: string): boolean {
@@ -2988,21 +3361,53 @@ function extractRawTitleFromPrefix(prefix: string): string {
   return trimRawTitle(lines.join("\n"));
 }
 
-function combineRawSegmentTitles(titles: string[]): string {
+function combineRawSegmentTitles(titles: string[], netWeight: string): string {
   const uniqueTitles = titles.reduce<string[]>((accumulator, current) => {
-    const normalized = normalizeComparable(current);
+    const cleanTitle = stripRawNetWeightFromTitle(current, netWeight);
+    const normalized = normalizeComparable(cleanTitle);
     const exists = accumulator.some(
       (title) => normalizeComparable(title) === normalized
     );
 
-    if (!exists) {
-      accumulator.push(current);
+    if (!exists && cleanTitle) {
+      accumulator.push(cleanTitle);
     }
 
     return accumulator;
   }, []);
 
-  return uniqueTitles.join("\n").trim();
+  const title = uniqueTitles.join(" / ").replace(/\s+/g, " ").trim();
+
+  if (!title || !netWeight) {
+    return title;
+  }
+
+  return `${title} - ${netWeight} e`;
+}
+
+function stripRawNetWeightFromTitle(title: string, netWeight: string): string {
+  const cleanTitle = title
+    .replace(/\s*\n+\s*/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (!netWeight) {
+    return cleanTitle;
+  }
+
+  const match = netWeight.match(/^(\d+(?:[.,]\d+)?)\s*(g|kg|ml|l)$/i);
+
+  if (!match) {
+    return cleanTitle.replace(new RegExp(`${escapeRegExp(netWeight)}\\s*(?:e|℮)?`, "i"), "").trim();
+  }
+
+  const [, quantity, unit] = match;
+  const weightPattern = new RegExp(
+    `\\s*[-–]?\\s*${escapeRegExp(quantity)}\\s*${escapeRegExp(unit)}\\s*(?:e|℮)?\\s*$`,
+    "i"
+  );
+
+  return cleanTitle.replace(weightPattern, "").trim();
 }
 
 function removeTrailingRawTitle(text: string, title: string): string {
