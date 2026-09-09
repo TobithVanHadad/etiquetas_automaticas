@@ -120,6 +120,7 @@ export function IndustrialLabelWorkbench() {
   const [zoom, setZoom] = useState(1);
   const [exportText, setExportText] = useState("");
   const [rawText, setRawText] = useState("");
+  const rawTextareaRef = useRef<HTMLTextAreaElement>(null);
   const [rawImportResult, setRawImportResult] = useState<RawImportResult | null>(
     null
   );
@@ -688,6 +689,35 @@ export function IndustrialLabelWorkbench() {
     }
   }
 
+  function toggleRawTextBold() {
+    const textarea = rawTextareaRef.current;
+
+    if (!textarea) {
+      setRawText((current) => `**${current}**`);
+      return;
+    }
+
+    const start = textarea.selectionStart;
+    const end = textarea.selectionEnd;
+    const selected = rawText.slice(start, end);
+    const before = rawText.slice(0, start);
+    const after = rawText.slice(end);
+    const next = selected
+      ? `${before}**${selected}**${after}`
+      : `${before}****${after}`;
+
+    setRawText(next);
+
+    requestAnimationFrame(() => {
+      textarea.focus();
+      if (selected) {
+        textarea.setSelectionRange(start + 2, end + 2);
+      } else {
+        textarea.setSelectionRange(start + 2, start + 2);
+      }
+    });
+  }
+
   return (
     <main className="min-h-screen bg-[#f4f6f5] text-zinc-950 xl:h-screen xl:overflow-hidden">
       <div className="grid min-h-screen grid-cols-1 xl:h-screen xl:grid-cols-[340px_minmax(560px,1fr)_460px]">
@@ -795,12 +825,26 @@ export function IndustrialLabelWorkbench() {
               <FileCode2 size={16} />
               Raw text
             </div>
-            <textarea
-              value={rawText}
-              onChange={(event) => setRawText(event.target.value)}
-              className="h-36 w-full resize-none rounded border border-zinc-300 bg-white px-2 py-1.5 font-mono text-xs outline-none"
-              placeholder="Pegue aqui el texto crudo de una etiqueta."
-            />
+            <div className="overflow-hidden rounded border border-zinc-300 bg-white">
+              <div className="flex items-center justify-end border-b border-zinc-200 bg-zinc-50 px-1 py-1">
+                <button
+                  type="button"
+                  onClick={toggleRawTextBold}
+                  className="inline-flex h-7 w-7 items-center justify-center rounded text-zinc-700 hover:bg-white hover:text-emerald-800"
+                  title="Negrita"
+                  aria-label="Negrita"
+                >
+                  <Bold size={15} />
+                </button>
+              </div>
+              <textarea
+                ref={rawTextareaRef}
+                value={rawText}
+                onChange={(event) => setRawText(event.target.value)}
+                className="h-36 w-full resize-none px-2 py-1.5 font-mono text-xs outline-none"
+                placeholder="Pegue aqui el texto crudo de una etiqueta."
+              />
+            </div>
             <div className="grid grid-cols-3 gap-2">
               <ActionButton onClick={() => void applyRawText()} icon={<RefreshCw size={16} />}>
                 Detectar
@@ -2255,6 +2299,12 @@ type RawParsedLabel = RawImportResult & {
   suggestedLabel?: Partial<LabelSpec>;
 };
 
+type RawLanguageSegment = {
+  language: LanguageCode;
+  text: string;
+  title?: string;
+};
+
 const RAW_SECTION_KEYS: RawSectionKey[] = [
   "ingredients",
   "warnings",
@@ -2472,6 +2522,16 @@ function parseRawLabelText(
   const resultLanguages: LanguageCode[] = detectedLanguages.length
     ? detectedLanguages
     : ["ES"];
+  const segmentTitle = combineRawSegmentTitles(
+    languageSegments
+      .map((segment) => segment.title)
+      .filter((value): value is string => Boolean(value?.trim()))
+  );
+
+  if (segmentTitle) {
+    next.name = segmentTitle;
+    detected.push("titulos por idioma");
+  }
 
   if (explicitLanguageSegments.length) {
     detected.push(`idiomas ${detectedLanguages.join("-")}`);
@@ -2487,16 +2547,21 @@ function parseRawLabelText(
   }
 
   for (const segment of languageSegments) {
-    const cleanSegment = removeKnownTitle(removeRawNutritionBlock(segment.text), title);
+    const titleForLanguage = segment.title || title;
+    const cleanSegment = removeKnownTitle(
+      removeRawNutritionBlock(segment.text),
+      titleForLanguage
+    );
     const sections = parseRawLanguageSections(cleanSegment, segment.language);
+    const inferredSections = inferRawSectionsFromSegment(segment.text);
     const currentContent = next.languages[segment.language] ?? {};
     const languageContent: ProductLanguageContent = {
       ...currentContent,
-      name: title || currentContent.name || next.name
+      name: titleForLanguage || currentContent.name || next.name
     };
 
     for (const key of RAW_SECTION_KEYS) {
-      const value = sections[key];
+      const value = sections[key] || inferredSections[key];
 
       if (value) {
         languageContent[key] = mergeDetectedText(languageContent[key], value);
@@ -2876,10 +2941,7 @@ function mergeRawCustomSections(
   return merged;
 }
 
-function extractRawLanguageSegments(text: string): Array<{
-  language: LanguageCode;
-  text: string;
-}> {
+function extractRawLanguageSegments(text: string): RawLanguageSegment[] {
   const markers: Array<{ language: LanguageCode; start: number; end: number }> = [];
   const markerPattern = /\(([A-Z]{2})\)/g;
   let match: RegExpExecArray | null;
@@ -2896,11 +2958,69 @@ function extractRawLanguageSegments(text: string): Array<{
 
   return markers.map((marker, index) => {
     const nextMarker = markers[index + 1];
+    const previousMarker = markers[index - 1];
+    const prefix = text.slice(previousMarker?.end ?? 0, marker.start);
+    const rawSegmentText = text.slice(marker.end, nextMarker?.start ?? text.length);
+    const nextTitle = nextMarker ? extractRawTitleFromPrefix(rawSegmentText) : "";
+
     return {
       language: marker.language,
-      text: text.slice(marker.end, nextMarker?.start ?? text.length).trim()
+      title: extractRawTitleFromPrefix(prefix),
+      text: removeTrailingRawTitle(rawSegmentText, nextTitle)
     };
   });
+}
+
+function extractRawTitleFromPrefix(prefix: string): string {
+  const paragraphs = prefix
+    .split(/\n\s*\n/g)
+    .map((paragraph) => paragraph.trim())
+    .filter(Boolean);
+  const source = paragraphs.at(-1) ?? prefix;
+  const lines = source
+    .split("\n")
+    .map((line) => stripRawHeaderMetadata(line))
+    .map((line) => cleanRawBody(line))
+    .filter(Boolean)
+    .filter(isRawTitleCandidate)
+    .slice(-3);
+
+  return trimRawTitle(lines.join("\n"));
+}
+
+function combineRawSegmentTitles(titles: string[]): string {
+  const uniqueTitles = titles.reduce<string[]>((accumulator, current) => {
+    const normalized = normalizeComparable(current);
+    const exists = accumulator.some(
+      (title) => normalizeComparable(title) === normalized
+    );
+
+    if (!exists) {
+      accumulator.push(current);
+    }
+
+    return accumulator;
+  }, []);
+
+  return uniqueTitles.join("\n").trim();
+}
+
+function removeTrailingRawTitle(text: string, title: string): string {
+  if (!title) {
+    return text.trim();
+  }
+
+  let next = text.trimEnd();
+
+  for (const line of title.split("\n").reverse()) {
+    const index = next.toLowerCase().lastIndexOf(line.toLowerCase());
+
+    if (index >= 0 && next.slice(index).trim() === line.trim()) {
+      next = next.slice(0, index).trimEnd();
+    }
+  }
+
+  return next.trim();
 }
 
 function createInferredRawSegments(
@@ -2908,7 +3028,7 @@ function createInferredRawSegments(
   title: string,
   inferredLanguages: LanguageCode[],
   fallbackLanguages: LanguageCode[]
-): Array<{ language: LanguageCode; text: string }> {
+): RawLanguageSegment[] {
   const language =
     inferredLanguages[0] ?? fallbackLanguages[0] ?? ("ES" as LanguageCode);
   const body = removeKnownTitle(removeRawNutritionBlock(text), title);
@@ -2916,6 +3036,7 @@ function createInferredRawSegments(
   return [
     {
       language,
+      title,
       text: body || text
     }
   ];
@@ -2977,6 +3098,56 @@ function parseRawLanguageSections(
   });
 
   return sections;
+}
+
+function inferRawSectionsFromSegment(
+  segment: string
+): Partial<Record<RawSectionKey, string>> {
+  const sections: Partial<Record<RawSectionKey, string>> = {};
+  const conservation = firstRawPatternBody(segment, [
+    /\b(Kühl und trocken lagern\.[\s\S]*?)(?=\s*(?:Hergestellt|Importiert|$))/i,
+    /\b(Store in a cool,\s*dry place\.[\s\S]*?)(?=\s*(?:Made in|Imported by|$))/i,
+    /\b(Conservar en un lugar fresco y seco\.[\s\S]*?)(?=\s*(?:Producido|Importado|$))/i,
+    /\b(Conservar en lugar fresco y seco\.[\s\S]*?)(?=\s*(?:Producido|Importado|$))/i
+  ]);
+  const origin = firstRawPatternBody(segment, [
+    /\b(Hergestellt in Mexiko)\b/i,
+    /\b(Made in Mexico)\b/i,
+    /\b(Producido en México)\b/i,
+    /\b(Producido en Mexico)\b/i,
+    /\b(Hecho en México)\b/i,
+    /\b(Hecho en Mexico)\b/i
+  ]);
+  const importer = firstRawPatternBody(segment, [
+    /\b(?:Importiert durch|Imported by|Importado por)\s*:?\s*([\s\S]*?)$/i
+  ]);
+
+  if (conservation) {
+    sections.conservation = conservation;
+  }
+
+  if (origin) {
+    sections.origin = origin;
+  }
+
+  if (importer) {
+    sections.importer = importer;
+  }
+
+  return sections;
+}
+
+function firstRawPatternBody(text: string, patterns: RegExp[]): string {
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    const value = match?.[1] ? cleanRawMultiline(match[1]) : "";
+
+    if (value) {
+      return value;
+    }
+  }
+
+  return "";
 }
 
 function findRawSectionMarkers(
@@ -3086,10 +3257,7 @@ function applyRawNutritionValues(
   languages: LanguageCode[],
   detected: string[]
 ): NutritionRow[] {
-  const lines = text
-    .split("\n")
-    .map((line) => cleanRawBody(line))
-    .filter(Boolean);
+  const lines = extractRawNutritionCandidates(text);
   const detectedIds = new Set<string>();
   const columnMode = inferRawNutritionColumnMode(text);
 
@@ -3190,9 +3358,59 @@ function assignRawNutritionValues(
   return {
     ...row,
     per100g: nutrientValues[0] ?? row.per100g,
-    perServing: nutrientValues[1] ?? row.perServing,
+    perServing: row.perServing,
     riPercent
   };
+}
+
+function extractRawNutritionCandidates(text: string): string[] {
+  const compactText = text.replace(/\n+/g, " ");
+  const nutritionStart = findNutritionMarkerIndex(compactText);
+  const nutritionSource =
+    nutritionStart >= 0 ? compactText.slice(nutritionStart) : compactText;
+  const nutritionEnd = nutritionSource.search(
+    /\b(?:Kühl|Store in|Conservar|Best before|Mindestens haltbar|Consumir preferentemente|Made in|Hergestellt|Producido|Importiert|Imported|Importado|BBD|LOT|Product From)\b/i
+  );
+  const nutritionBlock =
+    nutritionEnd > 0 ? nutritionSource.slice(0, nutritionEnd) : nutritionSource;
+  const lineChunks = text
+    .split(/\n+/g)
+    .filter((line) => !line.includes(";") && extractRawNutritionNumbers(line).length);
+  const chunks = [...nutritionBlock.split(/[;]/g), ...lineChunks];
+  const seen = new Set<string>();
+
+  return chunks
+    .map(stripRawNutritionHeaderContext)
+    .map((line) => cleanRawBody(line))
+    .filter(Boolean)
+    .filter((line) => {
+      const normalized = normalizeComparable(line);
+
+      if (seen.has(normalized)) {
+        return false;
+      }
+
+      seen.add(normalized);
+      return true;
+    });
+}
+
+function stripRawNutritionHeaderContext(line: string): string {
+  return line
+    .replace(
+      /\b(?:Nutrition Facts|Nutrition|Nutritional information|Nährwertangaben|Naehrwertangaben|Información nutricional|Informacion nutricional|Valeurs nutritionnelles|Voedingswaarde)\.?\s*/gi,
+      " "
+    )
+    .replace(
+      /\b(?:Quantity|Cantidad|Valores|Values|Werte)\s*(?:per|por|je)?\s*100\s*(?:g|kg|ml|l)\s*:?\s*/gi,
+      " "
+    )
+    .replace(/\b(?:per|por|je|pour|voor)\s*100\s*(?:g|kg|ml|l)\s*:?\s*/gi, " ")
+    .replace(
+      /\bServing\s+Size\s*\d+(?:[.,]\d+)?\s*(?:g|kg|ml|l)\b/gi,
+      " "
+    )
+    .replace(/\bServing\s+per\s+Package\s*\d+\b/gi, " ");
 }
 
 function assignRawEnergyValues(
