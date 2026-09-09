@@ -401,6 +401,36 @@ export function IndustrialLabelWorkbench() {
     }
   }
 
+  function downloadZplFile() {
+    const zpl = generateZpl(layout);
+    const fileName = createDownloadFileName(product, languages, "zpl");
+
+    downloadTextFile(fileName, zpl, "application/zpl;charset=utf-8");
+    setExportText(zpl);
+    setNotice({
+      tone: "success",
+      message: `ZPL descargado: ${fileName}`
+    });
+  }
+
+  function downloadWindowsPrintScript() {
+    const zpl = generateZpl(layout);
+    const zplFileName = createDownloadFileName(product, languages, "zpl");
+    const scriptFileName = createDownloadFileName(product, languages, "ps1");
+    const script = createWindowsZplPrintScript({
+      zpl,
+      zplFileName,
+      printerName: selectedPrinterProfile.printerName
+    });
+
+    downloadTextFile(scriptFileName, script, "text/plain;charset=utf-8");
+    setExportText(script);
+    setNotice({
+      tone: "success",
+      message: `Script Windows descargado: ${scriptFileName}`
+    });
+  }
+
   async function printTestLabel() {
     const confirmed = window.confirm(
       `Enviar una etiqueta de prueba a ${selectedPrinterProfile.printerName}?`
@@ -1934,6 +1964,18 @@ export function IndustrialLabelWorkbench() {
                 ZPL
               </ActionButton>
               <ActionButton
+                onClick={downloadZplFile}
+                icon={<Download size={16} />}
+              >
+                Descargar ZPL
+              </ActionButton>
+              <ActionButton
+                onClick={downloadWindowsPrintScript}
+                icon={<FileCode2 size={16} />}
+              >
+                Script Windows
+              </ActionButton>
+              <ActionButton
                 onClick={() => exportFromApi("btxml")}
                 icon={<FileCode2 size={16} />}
               >
@@ -2195,6 +2237,182 @@ function ActionButton({
       {children}
     </button>
   );
+}
+
+function downloadTextFile(
+  fileName: string,
+  content: string,
+  mimeType: string
+) {
+  const blob = new Blob([content], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+
+  link.href = url;
+  link.download = fileName;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function createDownloadFileName(
+  product: ProductRecord,
+  languages: LanguageCode[],
+  extension: "zpl" | "ps1"
+): string {
+  const base = sanitizeFileName(
+    [product.sku, product.name || "etiqueta", languages.join("-")]
+      .filter(Boolean)
+      .join("-")
+  );
+
+  return `${base || "etiqueta"}.${extension}`;
+}
+
+function sanitizeFileName(value: string): string {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9._-]+/gi, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 96);
+}
+
+function createWindowsZplPrintScript({
+  zpl,
+  zplFileName,
+  printerName
+}: {
+  zpl: string;
+  zplFileName: string;
+  printerName: string;
+}): string {
+  const zplBase64 = utf8ToBase64(zpl);
+  const safePrinterName = escapePowerShellSingleQuotedString(printerName);
+  const safeZplFileName = escapePowerShellSingleQuotedString(zplFileName);
+
+  return `$ErrorActionPreference = 'Stop'
+$printerName = '${safePrinterName}'
+$zplFileName = '${safeZplFileName}'
+$zplBase64 = @'
+${zplBase64}
+'@
+
+$jobFile = Join-Path $env:TEMP $zplFileName
+[System.IO.File]::WriteAllBytes($jobFile, [Convert]::FromBase64String(($zplBase64 -replace '\\s', '')))
+
+$signature = @"
+using System;
+using System.IO;
+using System.Runtime.InteropServices;
+
+public class RawPrinterHelper
+{
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Ansi)]
+    public class DOCINFOA
+    {
+        [MarshalAs(UnmanagedType.LPStr)] public string pDocName;
+        [MarshalAs(UnmanagedType.LPStr)] public string pOutputFile;
+        [MarshalAs(UnmanagedType.LPStr)] public string pDataType;
+    }
+
+    [DllImport("winspool.Drv", EntryPoint = "OpenPrinterA", SetLastError = true, CharSet = CharSet.Ansi, ExactSpelling = true, CallingConvention = CallingConvention.StdCall)]
+    public static extern bool OpenPrinter(string szPrinter, out IntPtr hPrinter, IntPtr pd);
+
+    [DllImport("winspool.Drv", EntryPoint = "ClosePrinter", SetLastError = true, ExactSpelling = true, CallingConvention = CallingConvention.StdCall)]
+    public static extern bool ClosePrinter(IntPtr hPrinter);
+
+    [DllImport("winspool.Drv", EntryPoint = "StartDocPrinterA", SetLastError = true, CharSet = CharSet.Ansi, ExactSpelling = true, CallingConvention = CallingConvention.StdCall)]
+    public static extern bool StartDocPrinter(IntPtr hPrinter, int level, [In, MarshalAs(UnmanagedType.LPStruct)] DOCINFOA di);
+
+    [DllImport("winspool.Drv", EntryPoint = "EndDocPrinter", SetLastError = true, ExactSpelling = true, CallingConvention = CallingConvention.StdCall)]
+    public static extern bool EndDocPrinter(IntPtr hPrinter);
+
+    [DllImport("winspool.Drv", EntryPoint = "StartPagePrinter", SetLastError = true, ExactSpelling = true, CallingConvention = CallingConvention.StdCall)]
+    public static extern bool StartPagePrinter(IntPtr hPrinter);
+
+    [DllImport("winspool.Drv", EntryPoint = "EndPagePrinter", SetLastError = true, ExactSpelling = true, CallingConvention = CallingConvention.StdCall)]
+    public static extern bool EndPagePrinter(IntPtr hPrinter);
+
+    [DllImport("winspool.Drv", EntryPoint = "WritePrinter", SetLastError = true, ExactSpelling = true, CallingConvention = CallingConvention.StdCall)]
+    public static extern bool WritePrinter(IntPtr hPrinter, IntPtr pBytes, int dwCount, out int dwWritten);
+
+    public static bool SendFileToPrinter(string printerName, string fileName)
+    {
+        byte[] bytes = File.ReadAllBytes(fileName);
+        return SendBytesToPrinter(printerName, bytes);
+    }
+
+    public static bool SendBytesToPrinter(string printerName, byte[] bytes)
+    {
+        IntPtr pUnmanagedBytes = Marshal.AllocCoTaskMem(bytes.Length);
+        IntPtr hPrinter = IntPtr.Zero;
+        int dwWritten = 0;
+        bool success = false;
+
+        try
+        {
+            Marshal.Copy(bytes, 0, pUnmanagedBytes, bytes.Length);
+
+            DOCINFOA di = new DOCINFOA();
+            di.pDocName = "Industrial Label ZPL";
+            di.pDataType = "RAW";
+
+            if (OpenPrinter(printerName.Normalize(), out hPrinter, IntPtr.Zero))
+            {
+                if (StartDocPrinter(hPrinter, 1, di))
+                {
+                    if (StartPagePrinter(hPrinter))
+                    {
+                        success = WritePrinter(hPrinter, pUnmanagedBytes, bytes.Length, out dwWritten);
+                        EndPagePrinter(hPrinter);
+                    }
+                    EndDocPrinter(hPrinter);
+                }
+                ClosePrinter(hPrinter);
+            }
+        }
+        finally
+        {
+            Marshal.FreeCoTaskMem(pUnmanagedBytes);
+        }
+
+        return success && dwWritten == bytes.Length;
+    }
+}
+"@
+
+if (-not ([System.Management.Automation.PSTypeName]'RawPrinterHelper').Type) {
+    Add-Type -TypeDefinition $signature
+}
+
+$sent = [RawPrinterHelper]::SendFileToPrinter($printerName, $jobFile)
+
+if (-not $sent) {
+    throw "Windows no pudo enviar el ZPL a la impresora '$printerName'. Verifique que el nombre del driver coincida exactamente."
+}
+
+Write-Host "Etiqueta enviada a $printerName"
+Write-Host "Archivo temporal: $jobFile"
+`;
+}
+
+function utf8ToBase64(value: string): string {
+  const bytes = new TextEncoder().encode(value);
+  let binary = "";
+  const chunkSize = 0x8000;
+
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    const chunk = bytes.slice(index, index + chunkSize);
+    binary += String.fromCharCode(...chunk);
+  }
+
+  return btoa(binary);
+}
+
+function escapePowerShellSingleQuotedString(value: string): string {
+  return value.replace(/'/g, "''");
 }
 
 function parsePrintPayload(text: string): PrintPayload {
