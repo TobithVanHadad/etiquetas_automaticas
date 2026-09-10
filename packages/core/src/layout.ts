@@ -146,17 +146,19 @@ function createStrategyAttempts(
     tableFontScale;
   const bodyFonts =
     usesIndustrialFonts
-      ? uniqueNumbers([
-          preferredBodyFontMm,
-          preferredBodyFontMm * 0.94,
-          preferredBodyFontMm * 0.88,
-          2.25,
-          2,
-          1.8,
-          1.6,
-          1.4,
-          MIN_TEXT_HEIGHT_MM
-        ]).map((fontMm) => clampToIndustrialMinimum(fontMm, minimumFontMm))
+      ? uniqueNumbers(
+          [
+            preferredBodyFontMm,
+            preferredBodyFontMm * 0.94,
+            preferredBodyFontMm * 0.88,
+            2.25 * bodyFontScale,
+            2 * bodyFontScale,
+            1.8 * bodyFontScale,
+            1.6 * bodyFontScale,
+            1.4 * bodyFontScale,
+            minimumFontMm
+          ].map((fontMm) => clampToIndustrialMinimum(fontMm, minimumFontMm))
+        )
       : uniqueNumbers([
           preferredBodyFontMm,
           preferredBodyFontMm * 0.94,

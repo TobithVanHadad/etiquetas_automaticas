@@ -88,6 +88,77 @@ const ZEBRA_NATIVE_FONT_PRESETS = [
   }
 ] as const;
 const DEFAULT_ZEBRA_NATIVE_FONT_PRESET = ZEBRA_NATIVE_FONT_PRESETS[0];
+const ZEBRA_NATIVE_FONT_FILES = [
+  "Z:NS20WGL4.FNT",
+  "Z:NS25WGL4.FNT",
+  "Z:NT20WGL4.FNT",
+  "Z:NT26WGL4.FNT",
+  "Z:NK20WGL4.FNT",
+  "Z:NK26WGL4.FNT",
+  "Z:NJ20WGL4.FNT",
+  "Z:NJ26WGL4.FNT",
+  "Z:FONT8.FNT",
+  "Z:FONT7.FNT",
+  "Z:FONT6.FNT",
+  "Z:FONT5.FNT",
+  "Z:FONT4.FNT",
+  "Z:FONT3.FNT",
+  "Z:FONT2.FNT",
+  "Z:FONT1.FNT",
+  "Z:FONT0.FNT",
+  "Z:MONOBD15.FNT",
+  "Z:GS.FNT",
+  "Z:H24.FNT",
+  "Z:H12.FNT",
+  "Z:H8.FNT",
+  "Z:H6.FNT",
+  "Z:E24.FNT",
+  "Z:E12.FNT",
+  "Z:E8.FNT",
+  "Z:E6.FNT",
+  "Z:T0041.FNT",
+  "Z:T0040.FNT",
+  "Z:T0039.FNT",
+  "Z:T0038.FNT",
+  "Z:T0037.FNT",
+  "Z:T0036.FNT",
+  "Z:T0035.FNT",
+  "Z:T0034.FNT",
+  "Z:T0033.FNT",
+  "Z:T0032.FNT",
+  "Z:T0031.FNT",
+  "Z:T0030.FNT",
+  "Z:T0024.FNT",
+  "Z:T0023.FNT",
+  "Z:T0022.FNT",
+  "Z:T0021.FNT",
+  "Z:T0020.FNT",
+  "Z:T0007.FNT",
+  "Z:T0002.FNT",
+  "Z:T0001.FNT",
+  "Z:T0000.FNT",
+  "Z:T.FNT",
+  "Z:S.FNT",
+  "Z:R.FNT",
+  "Z:Q.FNT",
+  "Z:P.FNT",
+  "Z:G.FNT",
+  "Z:F.FNT",
+  "Z:D.FNT",
+  "Z:B.FNT",
+  "Z:A.FNT",
+  "Z:V.FNT",
+  "Z:U.FNT",
+  "Z:TT0005M_.TTF",
+  "Z:TT0003M_.TTF",
+  "Z:TT067.TTF",
+  "Z:TT062.TTF",
+  "Z:TT061.TTF",
+  "Z:TT028.TTF",
+  "Z:TT026.TTF",
+  "Z:TT025.TTF",
+  "Z:0.TTF"
+] as const;
 
 type PrinterProfileId = (typeof PRINTER_PROFILES)[number]["id"];
 type PrinterProfile = (typeof PRINTER_PROFILES)[number];
@@ -1508,6 +1579,11 @@ export function IndustrialLabelWorkbench() {
                 <Field label="Fuente normal">
                   <input
                     value={label.zplFontRegular}
+                    list={
+                      label.fontFamily === "zebra-native"
+                        ? "zebra-native-font-files"
+                        : undefined
+                    }
                     onChange={(event) =>
                       setLabel((current) => ({
                         ...current,
@@ -1520,6 +1596,11 @@ export function IndustrialLabelWorkbench() {
                 <Field label="Fuente bold">
                   <input
                     value={label.zplFontBold}
+                    list={
+                      label.fontFamily === "zebra-native"
+                        ? "zebra-native-font-files"
+                        : undefined
+                    }
                     onChange={(event) =>
                       setLabel((current) => ({
                         ...current,
@@ -1530,6 +1611,13 @@ export function IndustrialLabelWorkbench() {
                   />
                 </Field>
               </div>
+            ) : null}
+            {label.fontFamily === "zebra-native" ? (
+              <datalist id="zebra-native-font-files">
+                {ZEBRA_NATIVE_FONT_FILES.map((fontFile) => (
+                  <option key={fontFile} value={fontFile} />
+                ))}
+              </datalist>
             ) : null}
             <div className="grid grid-cols-2 gap-2">
               <Field label="Ancho tabla %">

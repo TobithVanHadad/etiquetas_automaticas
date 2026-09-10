@@ -4,6 +4,7 @@ export const POINTS_PER_INCH = 72;
 export const MIN_TEXT_HEIGHT_MM = 1.2;
 export const MIN_ARIAL_POINT_SIZE = 6.2;
 export const MIN_ARIAL_TEXT_HEIGHT_MM = pointsToMm(MIN_ARIAL_POINT_SIZE);
+export const MIN_ZEBRA_NATIVE_COMMAND_HEIGHT_MM = 1.7;
 
 export function mmToDots(mm: number, dpi = DOTS_PER_INCH_DEFAULT): number {
   return Math.round((mm / MM_PER_INCH) * dpi);
@@ -20,6 +21,10 @@ export function pointsToMm(points: number): number {
 export function getMinimumTextHeightMm(
   fontFamily?: "zebra" | "zebra-native" | "arial"
 ): number {
+  if (fontFamily === "zebra-native") {
+    return MIN_ZEBRA_NATIVE_COMMAND_HEIGHT_MM;
+  }
+
   return fontFamily === "arial" ? MIN_ARIAL_TEXT_HEIGHT_MM : MIN_TEXT_HEIGHT_MM;
 }
 

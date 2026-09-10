@@ -209,37 +209,64 @@ function richTextToZpl({
       return;
     }
 
-    for (const segment of line.segments) {
-      if (!segment.text) {
+    for (const run of richTextRuns(line.segments, defaultBold)) {
+      if (!run.text) {
         continue;
       }
 
-      const bold = defaultBold || segment.bold;
-      const segmentWidth = measureSegmentWidthMm(segment.text, fontMm, bold);
-      if (/^\s+$/.test(segment.text)) {
-        cursorX += segmentWidth;
+      const runWidth = measureSegmentWidthMm(run.text, fontMm, run.bold);
+      if (/^\s+$/.test(run.text)) {
+        cursorX += runWidth;
         continue;
       }
 
       commands.push(
         `^FO${mmToDots(cursorX, dpi)},${mmToDots(cursorY, dpi)}`,
-        zplFontCommand(fontMm, bold, dpi, label),
-        `^FD${escapeZplField(segment.text)}^FS`
+        zplFontCommand(fontMm, run.bold, dpi, label),
+        `^FD${escapeZplField(run.text)}^FS`
       );
 
-      if (bold && label.fontFamily === "zebra") {
+      if (run.bold && label.fontFamily === "zebra") {
         commands.push(
           `^FO${mmToDots(cursorX + 0.08, dpi)},${mmToDots(cursorY, dpi)}`,
           zplFontCommand(fontMm, true, dpi, label),
-          `^FD${escapeZplField(segment.text)}^FS`
+          `^FD${escapeZplField(run.text)}^FS`
         );
       }
 
-      cursorX += segmentWidth;
+      cursorX += runWidth;
     }
   });
 
   return commands;
+}
+
+function richTextRuns(
+  segments: Array<{ text: string; bold: boolean }>,
+  defaultBold: boolean
+): Array<{ text: string; bold: boolean }> {
+  const runs: Array<{ text: string; bold: boolean }> = [];
+
+  for (const segment of segments) {
+    if (!segment.text) {
+      continue;
+    }
+
+    const bold = defaultBold || segment.bold;
+    const previous = runs[runs.length - 1];
+
+    if (previous && previous.bold === bold) {
+      previous.text += segment.text;
+      continue;
+    }
+
+    runs.push({
+      text: segment.text,
+      bold
+    });
+  }
+
+  return runs;
 }
 
 function zplFontCommand(
@@ -256,8 +283,8 @@ function zplFontCommand(
         : 0.5
       : label.fontFamily === "zebra-native"
         ? bold
-          ? 0.62
-          : 0.58
+          ? 0.56
+          : 0.52
         : 0.52;
   const width = Math.max(1, mmToDots(fontMm * widthScale, dpi));
 

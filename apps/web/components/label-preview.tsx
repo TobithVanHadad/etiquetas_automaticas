@@ -245,6 +245,10 @@ function previewFontFamily(fontFamily: LayoutResult["label"]["fontFamily"]): str
     return "Arial, Helvetica, sans-serif";
   }
 
+  if (fontFamily === "zebra-native") {
+    return "'Courier New', 'Lucida Console', monospace";
+  }
+
   return "'Arial Narrow', 'Roboto Condensed', Arial, sans-serif";
 }
 
