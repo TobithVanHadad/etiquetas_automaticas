@@ -61,6 +61,27 @@ const PRINTER_PROFILES = [
   }
 ] as const;
 const DEFAULT_PRINTER_PROFILE_ID = "zt610-203";
+const ZEBRA_NATIVE_FONT_PRESETS = [
+  {
+    id: "wgl4-europe",
+    label: "WGL4 europeo",
+    regular: "Z:NS20WGL4.FNT",
+    bold: "Z:NS25WGL4.FNT"
+  },
+  {
+    id: "directory-clear",
+    label: "Directorio claro",
+    regular: "Z:FONT8.FNT",
+    bold: "Z:MONOBD15.FNT"
+  },
+  {
+    id: "internal-ttf",
+    label: "TTF interno",
+    regular: "Z:0.TTF",
+    bold: "Z:TT0005M_.TTF"
+  }
+] as const;
+const DEFAULT_ZEBRA_NATIVE_FONT_PRESET = ZEBRA_NATIVE_FONT_PRESETS[0];
 
 type PrinterProfileId = (typeof PRINTER_PROFILES)[number]["id"];
 type PrinterProfile = (typeof PRINTER_PROFILES)[number];
@@ -118,8 +139,8 @@ export function IndustrialLabelWorkbench() {
     dpi: 203,
     marginMm: 4,
     fontFamily: "zebra-native",
-    zplFontRegular: "Z:FONT8.FNT",
-    zplFontBold: "Z:MONOBD15.FNT",
+    zplFontRegular: DEFAULT_ZEBRA_NATIVE_FONT_PRESET.regular,
+    zplFontBold: DEFAULT_ZEBRA_NATIVE_FONT_PRESET.bold,
     visualPreset: "crevel-current",
     headerTextScalePercent: 100,
     bodyTextScalePercent: 100,
@@ -1384,13 +1405,13 @@ export function IndustrialLabelWorkbench() {
                     fontFamily,
                     zplFontRegular:
                       fontFamily === "zebra-native"
-                        ? "Z:FONT8.FNT"
+                        ? DEFAULT_ZEBRA_NATIVE_FONT_PRESET.regular
                         : fontFamily === "arial"
                           ? "E:ARIAL.TTF"
                           : current.zplFontRegular,
                     zplFontBold:
                       fontFamily === "zebra-native"
-                        ? "Z:MONOBD15.FNT"
+                        ? DEFAULT_ZEBRA_NATIVE_FONT_PRESET.bold
                         : fontFamily === "arial"
                           ? "E:ARIALBD.TTF"
                           : current.zplFontBold
@@ -1403,6 +1424,36 @@ export function IndustrialLabelWorkbench() {
                 <option value="arial">Fuente TTF descargada</option>
               </select>
             </Field>
+            {label.fontFamily === "zebra-native" ? (
+              <Field label="Preset fuente">
+                <select
+                  value={getZebraNativeFontPresetId(label)}
+                  onChange={(event) => {
+                    const preset = ZEBRA_NATIVE_FONT_PRESETS.find(
+                      (item) => item.id === event.target.value
+                    );
+
+                    if (!preset) {
+                      return;
+                    }
+
+                    setLabel((current) => ({
+                      ...current,
+                      zplFontRegular: preset.regular,
+                      zplFontBold: preset.bold
+                    }));
+                  }}
+                  className="w-full rounded border border-zinc-300 px-2 py-1.5 text-sm"
+                >
+                  {ZEBRA_NATIVE_FONT_PRESETS.map((preset) => (
+                    <option key={preset.id} value={preset.id}>
+                      {preset.label}
+                    </option>
+                  ))}
+                  <option value="custom">Personalizado</option>
+                </select>
+              </Field>
+            ) : null}
             <Field label="Preset visual">
               <select
                 value={label.visualPreset}
@@ -2849,6 +2900,15 @@ function readProductLabelSettings(product: ProductRecord): {
       typeof printerProfile?.id === "string" ? printerProfile.id : undefined
     )
   };
+}
+
+function getZebraNativeFontPresetId(label: Required<LabelSpec>): string {
+  const preset = ZEBRA_NATIVE_FONT_PRESETS.find(
+    (item) =>
+      item.regular === label.zplFontRegular && item.bold === label.zplFontBold
+  );
+
+  return preset?.id ?? "custom";
 }
 
 function parseSavedLabelSpec(value: Record<string, unknown>): Partial<LabelSpec> {

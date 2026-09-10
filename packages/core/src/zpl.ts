@@ -263,7 +263,8 @@ function zplFontCommand(
 
   if (label.fontFamily === "arial" || label.fontFamily === "zebra-native") {
     const fontFile = (bold ? label.zplFontBold : label.zplFontRegular).trim();
-    const fallbackFontFile = label.fontFamily === "zebra-native" ? "Z:FONT8.FNT" : "E:ARIAL.TTF";
+    const fallbackFontFile =
+      label.fontFamily === "zebra-native" ? "Z:NS20WGL4.FNT" : "E:ARIAL.TTF";
     return `^A@N,${height},${width},${fontFile || fallbackFontFile}`;
   }
 
