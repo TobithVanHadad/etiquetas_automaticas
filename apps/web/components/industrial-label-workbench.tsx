@@ -23,6 +23,7 @@ import {
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   composeLabel,
+  exportBarTenderXml,
   generateZpl,
   mmToDots,
   NUTRIENT_CATALOG,
@@ -410,6 +411,18 @@ export function IndustrialLabelWorkbench() {
     setNotice({
       tone: "success",
       message: `ZPL descargado: ${fileName}`
+    });
+  }
+
+  function downloadBtxmlFile() {
+    const btxml = exportBarTenderXml(cleanProduct(product), layout);
+    const fileName = createDownloadFileName(product, languages, "btxml");
+
+    downloadTextFile(fileName, btxml, "application/xml;charset=utf-8");
+    setExportText(btxml);
+    setNotice({
+      tone: "success",
+      message: `BTXML descargado: ${fileName}`
     });
   }
 
@@ -1982,6 +1995,12 @@ export function IndustrialLabelWorkbench() {
                 BTXML
               </ActionButton>
               <ActionButton
+                onClick={downloadBtxmlFile}
+                icon={<Download size={16} />}
+              >
+                Descargar BTXML
+              </ActionButton>
+              <ActionButton
                 onClick={printTestLabel}
                 icon={<Send size={16} />}
               >
@@ -2259,7 +2278,7 @@ function downloadTextFile(
 function createDownloadFileName(
   product: ProductRecord,
   languages: LanguageCode[],
-  extension: "zpl" | "ps1"
+  extension: "zpl" | "ps1" | "btxml"
 ): string {
   const base = sanitizeFileName(
     [product.sku, product.name || "etiqueta", languages.join("-")]
