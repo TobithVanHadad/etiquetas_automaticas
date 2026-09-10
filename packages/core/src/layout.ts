@@ -7,7 +7,9 @@ import {
   MIN_TEXT_HEIGHT_MM
 } from "./measurement.js";
 import {
+  flowRichTextIntoRegions,
   measureRichTextHeightMm,
+  richTextLineToMarkedText,
   stripRichTextMarkers
 } from "./rich-text.js";
 import type {
@@ -404,6 +406,12 @@ function buildLayoutCandidate(
     strategy.marginMm -
     nutritionHeightMm -
     Math.max(0, label.nutritionTableBottomOffsetMm);
+  const nutritionXMm = getNutritionTableXMm(
+    label,
+    strategy.marginMm,
+    contentWidth,
+    nutritionWidthMm
+  );
   const bodyBottomMm = tableTopMm - strategy.spacingMm;
   let overflow = false;
   let overflowAreaMm2 = 0;
@@ -454,34 +462,25 @@ function buildLayoutCandidate(
 
   if (compactPreset) {
     const compactText = createCompactMultilingualBodyText(product, languages);
-    const compactLineHeight = 1.05;
-    const compactHeight = measureRichTextHeightMm(
-      compactText,
-      contentWidth,
-      strategy.bodyFontMm,
-      compactLineHeight
-    );
-    const compactBottom = bodyTopMm + compactHeight;
-    const compactElement = {
-      kind: "text" as const,
-      id: "language-compact-body",
-      role: "language-body",
-      xMm: strategy.marginMm,
-      yMm: bodyTopMm,
-      widthMm: contentWidth,
-      heightMm: compactHeight,
-      fontMm: strategy.bodyFontMm,
-      lineHeight: compactLineHeight,
+    const compactFlow = createCompactBodyFlowElements({
       text: compactText,
-      overflow: compactBottom > bodyBottomMm
-    };
+      marginMm: strategy.marginMm,
+      contentWidthMm: contentWidth,
+      bodyTopMm,
+      tableTopMm,
+      tableXMm: nutritionXMm,
+      tableWidthMm: nutritionWidthMm,
+      tableHeightMm: nutritionHeightMm,
+      fontMm: strategy.bodyFontMm,
+      spacingMm: strategy.spacingMm
+    });
 
-    if (compactBottom > bodyBottomMm) {
+    if (compactFlow.overflow) {
       overflow = true;
-      overflowAreaMm2 += (compactBottom - bodyBottomMm) * contentWidth;
+      overflowAreaMm2 += compactFlow.overflowAreaMm2;
     }
 
-    elements.push(compactElement);
+    elements.push(...compactFlow.elements);
   } else {
     const columns = createColumns(strategy, label, bodyTopMm, bodyBottomMm);
 
@@ -534,7 +533,7 @@ function buildLayoutCandidate(
   const table = createNutritionTableElement(
     product,
     languages,
-    getNutritionTableXMm(label, strategy.marginMm, contentWidth, nutritionWidthMm),
+    nutritionXMm,
     tableTopMm,
     nutritionWidthMm,
     strategy,
@@ -598,6 +597,123 @@ function buildLayoutCandidate(
       overflowAreaMm2,
       elementCount: elements.length
     }
+  };
+}
+
+function createCompactBodyFlowElements({
+  text,
+  marginMm,
+  contentWidthMm,
+  bodyTopMm,
+  tableTopMm,
+  tableXMm,
+  tableWidthMm,
+  tableHeightMm,
+  fontMm,
+  spacingMm
+}: {
+  text: string;
+  marginMm: number;
+  contentWidthMm: number;
+  bodyTopMm: number;
+  tableTopMm: number;
+  tableXMm: number;
+  tableWidthMm: number;
+  tableHeightMm: number;
+  fontMm: number;
+  spacingMm: number;
+}): { elements: LayoutElement[]; overflow: boolean; overflowAreaMm2: number } {
+  const lineHeight = 1.12;
+  const lineAdvanceMm = fontMm * lineHeight;
+  const topHeightMm = Math.max(0, tableTopMm - spacingMm - bodyTopMm);
+  const gapMm = Math.max(1, spacingMm);
+  const contentRightMm = marginMm + contentWidthMm;
+  const tableRightMm = tableXMm + tableWidthMm;
+  const leftSideWidthMm = Math.max(0, tableXMm - marginMm - gapMm);
+  const rightSideWidthMm = Math.max(0, contentRightMm - tableRightMm - gapMm);
+  const useLeftSide = leftSideWidthMm >= rightSideWidthMm;
+  const sideWidthMm = Math.max(leftSideWidthMm, rightSideWidthMm);
+  const sideXMm = useLeftSide ? marginMm : tableRightMm + gapMm;
+  const sideAvailable = sideWidthMm >= Math.max(18, contentWidthMm * 0.22);
+  const regions = [
+    {
+      id: "language-compact-body-main",
+      xMm: marginMm,
+      yMm: bodyTopMm,
+      widthMm: contentWidthMm,
+      maxLines: Math.max(0, Math.floor(topHeightMm / lineAdvanceMm))
+    },
+    ...(sideAvailable
+      ? [
+          {
+            id: "language-compact-body-side",
+            xMm: sideXMm,
+            yMm: tableTopMm,
+            widthMm: sideWidthMm,
+            maxLines: Math.max(0, Math.floor(tableHeightMm / lineAdvanceMm))
+          }
+        ]
+      : [])
+  ];
+  const flow = flowRichTextIntoRegions(
+    text,
+    regions.map((region) => ({
+      widthMm: region.widthMm,
+      maxLines: region.maxLines
+    })),
+    fontMm
+  );
+  const elements = flow.regions.flatMap((lines, index) => {
+    if (!lines.length) {
+      return [];
+    }
+
+    const region = regions[index];
+    const elementHeightMm = lines.length * lineAdvanceMm;
+
+    return [
+      {
+        kind: "text" as const,
+        id: region.id,
+        role: "language-body",
+        xMm: region.xMm,
+        yMm: region.yMm,
+        widthMm: region.widthMm,
+        heightMm: elementHeightMm,
+        fontMm,
+        lineHeight,
+        text: lines.map(richTextLineToMarkedText).join("\n"),
+        overflow: flow.overflow && index === flow.regions.length - 1
+      }
+    ];
+  });
+
+  if (!elements.length && text.trim()) {
+    return {
+      elements: [
+        {
+          kind: "text",
+          id: "language-compact-body-main",
+          role: "language-body",
+          xMm: marginMm,
+          yMm: bodyTopMm,
+          widthMm: contentWidthMm,
+          heightMm: lineAdvanceMm,
+          fontMm,
+          lineHeight,
+          text,
+          overflow: true
+        }
+      ],
+      overflow: true,
+      overflowAreaMm2: contentWidthMm * lineAdvanceMm
+    };
+  }
+
+  return {
+    elements,
+    overflow: flow.overflow,
+    overflowAreaMm2: flow.overflow ? Math.max(1, contentWidthMm * lineAdvanceMm) : 0
   };
 }
 
@@ -968,7 +1084,7 @@ function createNutritionRowHeights(
     Math.max(2, widthMm * fraction - 1.6)
   );
   const baseMeasure = formatBaseMeasure(product.nutrition);
-  const lineHeight = isCompactVisualPreset(label) ? 0.98 : 1.02;
+  const lineHeight = isCompactVisualPreset(label) ? 1.08 : 1.02;
   const rowPaddingMm = clampMm(label.nutritionTableRowPaddingMm, 0.2, 2);
   const headerHeight = Math.max(
     isCompactVisualPreset(label) ? 4.2 : 4.8,

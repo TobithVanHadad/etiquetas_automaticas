@@ -131,7 +131,7 @@ function tableToZpl(
           heightMm: Math.max(0.5, rowHeight - 0.35),
           text: cell.text,
           fontMm,
-          lineHeight: 0.98,
+          lineHeight: label.visualPreset === "industrial-plain" ? 1.02 : 1.08,
           align: cell.align,
           defaultBold: cell.weight === "bold",
           dpi,
@@ -184,6 +184,30 @@ function richTextToZpl({
   lines.forEach((line, lineIndex) => {
     let cursorX = xMm + alignmentOffsetMm(widthMm, line.widthMm, align);
     const cursorY = yMm + lineIndex * lineAdvanceMm;
+    const hasMixedBold = !defaultBold && line.segments.some((segment) => segment.bold);
+
+    if (!hasMixedBold) {
+      const lineText = line.segments.map((segment) => segment.text).join("");
+      if (!lineText) {
+        return;
+      }
+
+      commands.push(
+        `^FO${mmToDots(cursorX, dpi)},${mmToDots(cursorY, dpi)}`,
+        zplFontCommand(fontMm, defaultBold, dpi, label),
+        `^FD${escapeZplField(lineText)}^FS`
+      );
+
+      if (defaultBold && label.fontFamily === "zebra") {
+        commands.push(
+          `^FO${mmToDots(cursorX + 0.08, dpi)},${mmToDots(cursorY, dpi)}`,
+          zplFontCommand(fontMm, true, dpi, label),
+          `^FD${escapeZplField(lineText)}^FS`
+        );
+      }
+
+      return;
+    }
 
     for (const segment of line.segments) {
       if (!segment.text) {
@@ -192,6 +216,11 @@ function richTextToZpl({
 
       const bold = defaultBold || segment.bold;
       const segmentWidth = measureSegmentWidthMm(segment.text, fontMm, bold);
+      if (/^\s+$/.test(segment.text)) {
+        cursorX += segmentWidth;
+        continue;
+      }
+
       commands.push(
         `^FO${mmToDots(cursorX, dpi)},${mmToDots(cursorY, dpi)}`,
         zplFontCommand(fontMm, bold, dpi, label),
@@ -220,7 +249,7 @@ function zplFontCommand(
   label: Required<LabelSpec>
 ): string {
   const height = mmToDots(fontMm, dpi);
-  const widthScale = label.fontFamily === "zebra" ? 0.56 : 0.52;
+  const widthScale = label.fontFamily === "zebra" ? (bold ? 0.54 : 0.5) : 0.52;
   const width = Math.max(1, mmToDots(fontMm * widthScale, dpi));
 
   if (label.fontFamily === "arial") {

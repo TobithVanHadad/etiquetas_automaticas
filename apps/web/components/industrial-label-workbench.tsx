@@ -2045,12 +2045,35 @@ function NumberField({
   value: number;
   onChange: (value: number) => void;
 }) {
+  const [draft, setDraft] = useState(String(value));
+
+  useEffect(() => {
+    setDraft(String(value));
+  }, [value]);
+
   return (
     <Field label={label}>
       <input
         type="number"
-        value={value}
-        onChange={(event) => onChange(Number(event.target.value))}
+        value={draft}
+        onChange={(event) => {
+          const nextValue = event.target.value;
+          setDraft(nextValue);
+
+          if (nextValue.trim() === "") {
+            return;
+          }
+
+          const parsed = Number(nextValue);
+          if (Number.isFinite(parsed)) {
+            onChange(parsed);
+          }
+        }}
+        onBlur={() => {
+          if (draft.trim() === "") {
+            setDraft(String(value));
+          }
+        }}
         className="w-full rounded border border-zinc-300 px-2 py-1.5 text-sm"
       />
     </Field>

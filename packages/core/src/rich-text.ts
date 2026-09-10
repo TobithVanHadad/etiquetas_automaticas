@@ -8,6 +8,11 @@ export interface RichTextLine {
   widthMm: number;
 }
 
+export interface RichTextFlowRegion {
+  widthMm: number;
+  maxLines: number;
+}
+
 export function stripRichTextMarkers(text: string): string {
   return text.replace(/\*\*/g, "");
 }
@@ -77,6 +82,90 @@ export function wrapRichText(
   }
 
   return lines.length ? lines : [{ segments: [], widthMm: 0 }];
+}
+
+export function flowRichTextIntoRegions(
+  text: string,
+  regions: RichTextFlowRegion[],
+  fontMm: number
+): { regions: RichTextLine[][]; overflow: boolean } {
+  const normalizedRegions = regions.map((region) => ({
+    widthMm: Math.max(1, region.widthMm),
+    maxLines: Math.max(0, Math.floor(region.maxLines))
+  }));
+  const flowedRegions = normalizedRegions.map(() => [] as RichTextLine[]);
+  let regionIndex = 0;
+  let current: RichTextLine = { segments: [], widthMm: 0 };
+  let overflow = false;
+
+  const advancePastFullRegions = () => {
+    while (
+      regionIndex < normalizedRegions.length &&
+      flowedRegions[regionIndex].length >= normalizedRegions[regionIndex].maxLines
+    ) {
+      regionIndex += 1;
+    }
+  };
+
+  const pushCurrentLine = () => {
+    trimLine(current);
+    advancePastFullRegions();
+
+    if (regionIndex >= normalizedRegions.length) {
+      overflow = overflow || current.segments.length > 0;
+      current = { segments: [], widthMm: 0 };
+      return;
+    }
+
+    flowedRegions[regionIndex].push(current);
+    current = { segments: [], widthMm: 0 };
+    advancePastFullRegions();
+  };
+
+  const addToken = (token: RichTextSegment) => {
+    advancePastFullRegions();
+
+    if (regionIndex >= normalizedRegions.length) {
+      overflow = true;
+      return;
+    }
+
+    const region = normalizedRegions[regionIndex];
+    const tokenWidth = measureSegmentWidthMm(token.text, fontMm, token.bold);
+
+    if (current.segments.length > 0 && current.widthMm + tokenWidth > region.widthMm) {
+      pushCurrentLine();
+      if (/^\s+$/.test(token.text)) {
+        return;
+      }
+      addToken(token);
+      return;
+    }
+
+    if (tokenWidth > region.widthMm) {
+      const pieces = breakLongToken(token, region.widthMm, fontMm);
+      for (const piece of pieces) {
+        addToken(piece);
+      }
+      return;
+    }
+
+    current.segments.push(token);
+    current.widthMm += tokenWidth;
+  };
+
+  for (const paragraph of text.split(/\r?\n/g)) {
+    tokenizeRichSegments(parseRichText(paragraph)).forEach(addToken);
+    pushCurrentLine();
+  }
+
+  return { regions: flowedRegions, overflow };
+}
+
+export function richTextLineToMarkedText(line: RichTextLine): string {
+  return line.segments
+    .map((segment) => (segment.bold ? `**${segment.text}**` : segment.text))
+    .join("");
 }
 
 export function measureRichTextHeightMm(
