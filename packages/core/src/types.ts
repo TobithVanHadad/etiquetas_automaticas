@@ -100,7 +100,7 @@ export interface LabelSpec {
   heightMm: number;
   dpi: number;
   marginMm?: number;
-  fontFamily?: "zebra" | "arial";
+  fontFamily?: "zebra" | "zebra-native" | "arial";
   zplFontRegular?: string;
   zplFontBold?: string;
   visualPreset?: "crevel-current" | "industrial-plain" | "poblano-import";

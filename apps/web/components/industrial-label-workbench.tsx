@@ -117,9 +117,9 @@ export function IndustrialLabelWorkbench() {
     heightMm: 150,
     dpi: 203,
     marginMm: 4,
-    fontFamily: "zebra",
-    zplFontRegular: "E:ARIAL.TTF",
-    zplFontBold: "E:ARIALBD.TTF",
+    fontFamily: "zebra-native",
+    zplFontRegular: "Z:FONT8.FNT",
+    zplFontBold: "Z:MONOBD15.FNT",
     visualPreset: "crevel-current",
     headerTextScalePercent: 100,
     bodyTextScalePercent: 100,
@@ -1376,16 +1376,31 @@ export function IndustrialLabelWorkbench() {
             <Field label="Fuente ZPL">
               <select
                 value={label.fontFamily}
-                onChange={(event) =>
+                onChange={(event) => {
+                  const fontFamily = event.target
+                    .value as Required<LabelSpec>["fontFamily"];
                   setLabel((current) => ({
                     ...current,
-                    fontFamily: event.target.value as "zebra" | "arial"
-                  }))
-                }
+                    fontFamily,
+                    zplFontRegular:
+                      fontFamily === "zebra-native"
+                        ? "Z:FONT8.FNT"
+                        : fontFamily === "arial"
+                          ? "E:ARIAL.TTF"
+                          : current.zplFontRegular,
+                    zplFontBold:
+                      fontFamily === "zebra-native"
+                        ? "Z:MONOBD15.FNT"
+                        : fontFamily === "arial"
+                          ? "E:ARIALBD.TTF"
+                          : current.zplFontBold
+                  }));
+                }}
                 className="w-full rounded border border-zinc-300 px-2 py-1.5 text-sm"
               >
-                <option value="zebra">Zebra interna</option>
-                <option value="arial">Arial descargada</option>
+                <option value="zebra-native">Zebra nativa cargada (.FNT)</option>
+                <option value="zebra">Zebra escalable ^A0</option>
+                <option value="arial">Fuente TTF descargada</option>
               </select>
             </Field>
             <Field label="Preset visual">
@@ -1431,9 +1446,9 @@ export function IndustrialLabelWorkbench() {
                 }
               />
             </div>
-            {label.fontFamily === "arial" ? (
+            {label.fontFamily !== "zebra" ? (
               <div className="grid grid-cols-2 gap-2">
-                <Field label="Arial normal">
+                <Field label="Fuente normal">
                   <input
                     value={label.zplFontRegular}
                     onChange={(event) =>
@@ -1445,7 +1460,7 @@ export function IndustrialLabelWorkbench() {
                     className="w-full rounded border border-zinc-300 px-2 py-1.5 text-sm"
                   />
                 </Field>
-                <Field label="Arial bold">
+                <Field label="Fuente bold">
                   <input
                     value={label.zplFontBold}
                     onChange={(event) =>
@@ -2843,7 +2858,11 @@ function parseSavedLabelSpec(value: Record<string, unknown>): Partial<LabelSpec>
   if (typeof value.heightMm === "number") label.heightMm = value.heightMm;
   if (typeof value.dpi === "number") label.dpi = value.dpi;
   if (typeof value.marginMm === "number") label.marginMm = value.marginMm;
-  if (value.fontFamily === "zebra" || value.fontFamily === "arial") {
+  if (
+    value.fontFamily === "zebra" ||
+    value.fontFamily === "zebra-native" ||
+    value.fontFamily === "arial"
+  ) {
     label.fontFamily = value.fontFamily;
   }
   if (typeof value.zplFontRegular === "string") {

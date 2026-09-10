@@ -249,12 +249,22 @@ function zplFontCommand(
   label: Required<LabelSpec>
 ): string {
   const height = mmToDots(fontMm, dpi);
-  const widthScale = label.fontFamily === "zebra" ? (bold ? 0.54 : 0.5) : 0.52;
+  const widthScale =
+    label.fontFamily === "zebra"
+      ? bold
+        ? 0.54
+        : 0.5
+      : label.fontFamily === "zebra-native"
+        ? bold
+          ? 0.62
+          : 0.58
+        : 0.52;
   const width = Math.max(1, mmToDots(fontMm * widthScale, dpi));
 
-  if (label.fontFamily === "arial") {
-    const fontFile = bold ? label.zplFontBold : label.zplFontRegular;
-    return `^A@N,${height},${width},${fontFile}`;
+  if (label.fontFamily === "arial" || label.fontFamily === "zebra-native") {
+    const fontFile = (bold ? label.zplFontBold : label.zplFontRegular).trim();
+    const fallbackFontFile = label.fontFamily === "zebra-native" ? "Z:FONT8.FNT" : "E:ARIAL.TTF";
+    return `^A@N,${height},${width},${fontFile || fallbackFontFile}`;
   }
 
   return `^A0N,${height},${width}`;

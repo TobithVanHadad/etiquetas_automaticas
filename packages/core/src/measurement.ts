@@ -17,7 +17,9 @@ export function pointsToMm(points: number): number {
   return (points / POINTS_PER_INCH) * MM_PER_INCH;
 }
 
-export function getMinimumTextHeightMm(fontFamily?: "zebra" | "arial"): number {
+export function getMinimumTextHeightMm(
+  fontFamily?: "zebra" | "zebra-native" | "arial"
+): number {
   return fontFamily === "arial" ? MIN_ARIAL_TEXT_HEIGHT_MM : MIN_TEXT_HEIGHT_MM;
 }
 

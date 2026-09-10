@@ -76,9 +76,9 @@ function normalizeLabelSpec(label: LabelSpec): Required<LabelSpec> {
     heightMm: label.heightMm || 150,
     dpi: label.dpi || 203,
     marginMm: label.marginMm ?? 4,
-    fontFamily: label.fontFamily ?? "zebra",
-    zplFontRegular: label.zplFontRegular ?? "E:ARIAL.TTF",
-    zplFontBold: label.zplFontBold ?? "E:ARIALBD.TTF",
+    fontFamily: label.fontFamily ?? "zebra-native",
+    zplFontRegular: label.zplFontRegular ?? "Z:FONT8.FNT",
+    zplFontBold: label.zplFontBold ?? "Z:MONOBD15.FNT",
     visualPreset: label.visualPreset ?? "crevel-current",
     headerTextScalePercent: label.headerTextScalePercent ?? 100,
     bodyTextScalePercent: label.bodyTextScalePercent ?? 100,
@@ -134,17 +134,18 @@ function createStrategyAttempts(
   const bodyFontScale = clampPercent(label.bodyTextScalePercent, 75, 180) / 100;
   const tableFontScale =
     clampPercent(label.nutritionTableFontScalePercent, 75, 180) / 100;
+  const usesIndustrialFonts = label.fontFamily !== "arial";
   const preferredBodyBaseMm =
-    label.fontFamily === "zebra" ? MIN_TEXT_HEIGHT_MM * 2.15 : minimumFontMm + 0.28;
+    usesIndustrialFonts ? MIN_TEXT_HEIGHT_MM * 2.15 : minimumFontMm + 0.28;
   const preferredBodyFontMm = clampToIndustrialMinimum(
     preferredBodyBaseMm * bodyFontScale,
     minimumFontMm
   );
   const preferredTableFontMm =
-    (label.fontFamily === "zebra" ? MIN_TEXT_HEIGHT_MM * 1.85 : minimumFontMm) *
+    (usesIndustrialFonts ? MIN_TEXT_HEIGHT_MM * 1.85 : minimumFontMm) *
     tableFontScale;
   const bodyFonts =
-    label.fontFamily === "zebra"
+    usesIndustrialFonts
       ? uniqueNumbers([
           preferredBodyFontMm,
           preferredBodyFontMm * 0.94,
@@ -163,7 +164,7 @@ function createStrategyAttempts(
           minimumFontMm
         ]).map((fontMm) => clampToIndustrialMinimum(fontMm, minimumFontMm));
   const tableFonts =
-    label.fontFamily === "zebra"
+    usesIndustrialFonts
       ? [
           preferredTableFontMm,
           2 * tableFontScale,
