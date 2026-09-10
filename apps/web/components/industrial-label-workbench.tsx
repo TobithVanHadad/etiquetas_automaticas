@@ -58,6 +58,12 @@ const PRINTER_PROFILES = [
     label: "ZT610 300 DPI",
     printerName: "ZDesigner ZT610-300dpi ZPL",
     dpi: 300
+  },
+  {
+    id: "zt620-300",
+    label: "ZT620 300 DPI",
+    printerName: "ZDesigner ZT620-300dpi ZPL",
+    dpi: 300
   }
 ] as const;
 const DEFAULT_PRINTER_PROFILE_ID = "zt610-203";
