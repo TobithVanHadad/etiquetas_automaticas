@@ -1,10 +1,5 @@
 import { mmToDots } from "./measurement.js";
-import {
-  hasRichTextMarkers,
-  measureSegmentWidthMm,
-  stripRichTextMarkers,
-  wrapRichText
-} from "./rich-text.js";
+import { measureSegmentWidthMm, wrapRichText } from "./rich-text.js";
 import type { LabelSpec, LayoutElement, LayoutResult, TableElement } from "./types.js";
 
 export function generateZpl(layout: LayoutResult): string {
@@ -33,35 +28,19 @@ function elementToZpl(
 ): string[] {
   switch (element.kind) {
     case "text":
-      if (hasRichTextMarkers(element.text)) {
-        return richTextToZpl({
-          xMm: element.xMm,
-          yMm: element.yMm,
-          widthMm: element.widthMm,
-          text: element.text,
-          fontMm: element.fontMm,
-          lineHeight: element.lineHeight,
-          align: element.align,
-          defaultBold: element.weight === "bold",
-          dpi,
-          label
-        });
-      }
-
-      return [
-        `^FO${mmToDots(element.xMm, dpi)},${mmToDots(element.yMm, dpi)}`,
-        zplFontCommand(element.fontMm, element.weight === "bold", dpi, label),
-        `^FB${mmToDots(element.widthMm, dpi)},${Math.max(1, Math.floor(element.heightMm / (element.fontMm * element.lineHeight)))},${mmToDots(element.fontMm * 0.2, dpi)},${zplAlign(element.align)},0`,
-        `^FD${escapeZplField(stripRichTextMarkers(element.text))}^FS`,
-        ...(element.weight === "bold" && label.fontFamily === "zebra"
-          ? [
-              `^FO${mmToDots(element.xMm + 0.08, dpi)},${mmToDots(element.yMm, dpi)}`,
-              zplFontCommand(element.fontMm, true, dpi, label),
-              `^FB${mmToDots(element.widthMm, dpi)},${Math.max(1, Math.floor(element.heightMm / (element.fontMm * element.lineHeight)))},${mmToDots(element.fontMm * 0.2, dpi)},${zplAlign(element.align)},0`,
-              `^FD${escapeZplField(stripRichTextMarkers(element.text))}^FS`
-            ]
-          : [])
-      ];
+      return richTextToZpl({
+        xMm: element.xMm,
+        yMm: element.yMm,
+        widthMm: element.widthMm,
+        heightMm: element.heightMm,
+        text: element.text,
+        fontMm: element.fontMm,
+        lineHeight: element.lineHeight,
+        align: element.align,
+        defaultBold: element.weight === "bold",
+        dpi,
+        label
+      });
     case "line":
       if (element.direction === "horizontal") {
         return [
@@ -144,20 +123,21 @@ function tableToZpl(
           .reduce((total, fraction) => total + fraction, 0);
       const fontMm = cell.fontMm ?? table.fontMm;
       const y = rowY + 0.25;
-      const lines = Math.max(1, Math.floor((rowHeight - 0.35) / (fontMm * 0.98)));
-
       commands.push(
-        `^FO${mmToDots(cellX + 0.55, dpi)},${mmToDots(y, dpi)}`,
-        zplFontCommand(fontMm, cell.weight === "bold", dpi, label),
-        `^FB${mmToDots(cellWidth - 1.1, dpi)},${lines},0,${zplAlign(cell.align)},0^FD${escapeZplField(stripRichTextMarkers(cell.text))}^FS`
+        ...richTextToZpl({
+          xMm: cellX + 0.55,
+          yMm: y,
+          widthMm: Math.max(1, cellWidth - 1.1),
+          heightMm: Math.max(0.5, rowHeight - 0.35),
+          text: cell.text,
+          fontMm,
+          lineHeight: 0.98,
+          align: cell.align,
+          defaultBold: cell.weight === "bold",
+          dpi,
+          label
+        })
       );
-      if (cell.weight === "bold" && label.fontFamily === "zebra") {
-        commands.push(
-          `^FO${mmToDots(cellX + 0.63, dpi)},${mmToDots(y, dpi)}`,
-          zplFontCommand(fontMm, true, dpi, label),
-          `^FB${mmToDots(cellWidth - 1.1, dpi)},${lines},0,${zplAlign(cell.align)},0^FD${escapeZplField(stripRichTextMarkers(cell.text))}^FS`
-        );
-      }
       cellX += cellWidth;
       colIndex += colSpan;
     }
@@ -172,6 +152,7 @@ function richTextToZpl({
   xMm,
   yMm,
   widthMm,
+  heightMm,
   text,
   fontMm,
   lineHeight,
@@ -183,6 +164,7 @@ function richTextToZpl({
   xMm: number;
   yMm: number;
   widthMm: number;
+  heightMm?: number;
   text: string;
   fontMm: number;
   lineHeight: number;
@@ -192,7 +174,11 @@ function richTextToZpl({
   label: Required<LabelSpec>;
 }): string[] {
   const commands: string[] = [];
-  const lines = wrapRichText(text, widthMm, fontMm);
+  const maxLines =
+    heightMm === undefined
+      ? Number.POSITIVE_INFINITY
+      : Math.max(1, Math.floor(heightMm / (fontMm * lineHeight)));
+  const lines = wrapRichText(text, widthMm, fontMm).slice(0, maxLines);
   const lineAdvanceMm = fontMm * lineHeight;
 
   lines.forEach((line, lineIndex) => {
@@ -234,7 +220,8 @@ function zplFontCommand(
   label: Required<LabelSpec>
 ): string {
   const height = mmToDots(fontMm, dpi);
-  const width = mmToDots(fontMm * 0.98, dpi);
+  const widthScale = label.fontFamily === "zebra" ? 0.56 : 0.52;
+  const width = Math.max(1, mmToDots(fontMm * widthScale, dpi));
 
   if (label.fontFamily === "arial") {
     const fontFile = bold ? label.zplFontBold : label.zplFontRegular;
@@ -258,18 +245,6 @@ function alignmentOffsetMm(
   }
 
   return 0;
-}
-
-function zplAlign(align: string | undefined): "L" | "C" | "R" {
-  if (align === "center") {
-    return "C";
-  }
-
-  if (align === "right") {
-    return "R";
-  }
-
-  return "L";
 }
 
 function escapeZplField(value: string): string {
