@@ -1511,7 +1511,7 @@ export function IndustrialLabelWorkbench() {
                 <input
                   type="number"
                   min={75}
-                  max={130}
+                  max={180}
                   value={label.nutritionTableFontScalePercent}
                   onChange={(event) =>
                     setLabel((current) => ({
@@ -1640,6 +1640,44 @@ export function IndustrialLabelWorkbench() {
                   </button>
                 </div>
               ) : null}
+              <div className="flex flex-wrap items-center gap-1 rounded border border-zinc-200 bg-white px-2 py-1">
+                <QuickPercentControl
+                  label="Titulo"
+                  value={label.headerTextScalePercent}
+                  min={75}
+                  max={180}
+                  onChange={(headerTextScalePercent) =>
+                    setLabel((current) => ({
+                      ...current,
+                      headerTextScalePercent
+                    }))
+                  }
+                />
+                <QuickPercentControl
+                  label="Texto"
+                  value={label.bodyTextScalePercent}
+                  min={75}
+                  max={180}
+                  onChange={(bodyTextScalePercent) =>
+                    setLabel((current) => ({
+                      ...current,
+                      bodyTextScalePercent
+                    }))
+                  }
+                />
+                <QuickPercentControl
+                  label="Tabla"
+                  value={label.nutritionTableFontScalePercent}
+                  min={75}
+                  max={180}
+                  onChange={(nutritionTableFontScalePercent) =>
+                    setLabel((current) => ({
+                      ...current,
+                      nutritionTableFontScalePercent
+                    }))
+                  }
+                />
+              </div>
               <IconButton
                 label="Reducir zoom"
                 onClick={() => setZoom((current) => Math.max(0.35, current - 0.1))}
@@ -2129,6 +2167,49 @@ function PercentStepper({
         </button>
       </div>
     </Field>
+  );
+}
+
+function QuickPercentControl({
+  label,
+  value,
+  min,
+  max,
+  onChange
+}: {
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  onChange: (value: number) => void;
+}) {
+  const normalizedValue = clampPercentSetting(value, min, max);
+
+  return (
+    <div className="flex items-center gap-1 text-xs">
+      <span className="min-w-11 font-semibold text-zinc-700">{label}</span>
+      <button
+        type="button"
+        onClick={() => onChange(clampPercentSetting(normalizedValue - 5, min, max))}
+        className="inline-flex h-7 w-7 items-center justify-center rounded border border-zinc-300 bg-white text-zinc-700 hover:border-emerald-700 hover:bg-emerald-50"
+        title={`Bajar ${label}`}
+        aria-label={`Bajar ${label}`}
+      >
+        <Minus size={13} />
+      </button>
+      <span className="w-11 text-center tabular-nums text-zinc-700">
+        {normalizedValue}%
+      </span>
+      <button
+        type="button"
+        onClick={() => onChange(clampPercentSetting(normalizedValue + 5, min, max))}
+        className="inline-flex h-7 w-7 items-center justify-center rounded border border-zinc-300 bg-white text-zinc-700 hover:border-emerald-700 hover:bg-emerald-50"
+        title={`Subir ${label}`}
+        aria-label={`Subir ${label}`}
+      >
+        <Plus size={13} />
+      </button>
+    </div>
   );
 }
 
@@ -3322,6 +3403,8 @@ function parseRawLabelText(
   const resultLanguages: LanguageCode[] = detectedLanguages.length
     ? detectedLanguages
     : ["ES"];
+  const nutritionHeadersByLanguage: ProductRecord["nutrition"]["headerTextByLanguage"] =
+    {};
   const segmentTitle = combineRawSegmentTitles(
     languageSegments
       .map((segment) => segment.title)
@@ -3349,6 +3432,10 @@ function parseRawLabelText(
 
   for (const segment of languageSegments) {
     const titleForLanguage = segment.title || title;
+    const nutritionHeader = extractRawNutritionHeaderForLanguage(
+      segment.text,
+      segment.language
+    );
     const cleanSegment = removeKnownTitle(
       removeRawNutritionBlock(segment.text),
       titleForLanguage
@@ -3404,10 +3491,16 @@ function parseRawLabelText(
     }
 
     next.languages[segment.language] = languageContent;
+
+    if (nutritionHeader) {
+      nutritionHeadersByLanguage[segment.language] = nutritionHeader;
+      detected.push(`${segment.language} encabezado nutricional`);
+    }
   }
 
   next.nutrition = {
     ...next.nutrition,
+    headerTextByLanguage: nutritionHeadersByLanguage,
     rows: applyRawNutritionValues(normalizedText, resultLanguages, detected)
   };
   const suggestedLabel = createRawLabelSuggestion(normalizedText, next);
@@ -3437,6 +3530,7 @@ function createRawDetectionBase(product: ProductRecord): ProductRecord {
       servingSize: "",
       baseQuantity: product.nutrition.baseQuantity || "100",
       baseUnit: product.nutrition.baseUnit || "g",
+      headerTextByLanguage: {},
       rows: []
     }
   });
@@ -3478,6 +3572,72 @@ function extractRawBaseMeasure(
     quantity: match[1],
     unit: match[2].toLowerCase() as "g" | "ml" | "kg" | "l"
   };
+}
+
+function extractRawNutritionHeaderForLanguage(
+  text: string,
+  language: LanguageCode
+): string {
+  const compactText = text.replace(/\n+/g, " ").replace(/\s+/g, " ").trim();
+  const baseMeasurePattern = "\\d+(?:[.,]\\d+)?\\s*(?:g|kg|ml|l)";
+  const patternsByLanguage: Partial<Record<LanguageCode, RegExp[]>> = {
+    DE: [
+      new RegExp(
+        `\\b(?:Nährwertangaben|Naehrwertangaben)\\s+je\\s+${baseMeasurePattern}\\.?\\s*(?:Zubereitetem\\s+Produkt\\s*\\(nach\\s+Zubereitungsanleitung\\))?`,
+        "i"
+      ),
+      /\b(?:Nährwertangaben|Naehrwertangaben)\b/i
+    ],
+    ES: [
+      new RegExp(
+        `\\b(?:Información nutricional|Informacion nutricional)\\.?\\s*(?:Cantidad|Valores?)?\\s*(?:por|per)?\\s*${baseMeasurePattern}`,
+        "i"
+      ),
+      /\b(?:Información nutricional|Informacion nutricional)\b/i
+    ],
+    EN: [
+      new RegExp(
+        `\\b(?:Nutritional information|Nutrition information|Nutrition Facts)\\.?\\s*(?:Quantity|Values?)?\\s*(?:per|por)?\\s*${baseMeasurePattern}`,
+        "i"
+      ),
+      /\b(?:Nutritional information|Nutrition information|Nutrition Facts)\b/i
+    ],
+    FR: [
+      new RegExp(
+        `\\b(?:Déclaration nutritionnelle|Declaration nutritionnelle|Valeurs nutritionnelles)\\.?\\s*(?:Valeurs?)?\\s*(?:pour|par|per)?\\s*${baseMeasurePattern}`,
+        "i"
+      ),
+      /\b(?:Déclaration nutritionnelle|Declaration nutritionnelle|Valeurs nutritionnelles)\b/i
+    ],
+    NL: [
+      new RegExp(
+        `\\b(?:Voedingswaarde|Voedingswaarden)\\.?\\s*(?:Waarden)?\\s*(?:per|voor)?\\s*${baseMeasurePattern}`,
+        "i"
+      ),
+      /\b(?:Voedingswaarde|Voedingswaarden)\b/i
+    ]
+  };
+  const patterns = [
+    ...(patternsByLanguage[language] ?? []),
+    new RegExp(
+      `\\b(?:Nährwertangaben|Naehrwertangaben|Información nutricional|Informacion nutricional|Nutritional information|Nutrition information|Nutrition Facts|Déclaration nutritionnelle|Declaration nutritionnelle|Valeurs nutritionnelles|Voedingswaarde|Voedingswaarden)\\.?\\s*(?:je|por|per|pour|voor)?\\s*${baseMeasurePattern}`,
+      "i"
+    )
+  ];
+
+  for (const pattern of patterns) {
+    const match = compactText.match(pattern);
+    const value = match?.[0]
+      ?.replace(/\s*[:;]\s*$/, "")
+      .replace(/\s+\./g, ".")
+      .trim();
+
+    if (value) {
+      return cleanRawBody(value);
+    }
+  }
+
+  return "";
 }
 
 function extractRawServingSize(text: string): string {

@@ -133,7 +133,7 @@ function createStrategyAttempts(
   const minimumFontMm = getMinimumTextHeightMm(label.fontFamily);
   const bodyFontScale = clampPercent(label.bodyTextScalePercent, 75, 180) / 100;
   const tableFontScale =
-    clampPercent(label.nutritionTableFontScalePercent, 75, 130) / 100;
+    clampPercent(label.nutritionTableFontScalePercent, 75, 180) / 100;
   const preferredBodyBaseMm =
     label.fontFamily === "zebra" ? MIN_TEXT_HEIGHT_MM * 2.15 : minimumFontMm + 0.28;
   const preferredBodyFontMm = clampToIndustrialMinimum(
@@ -631,10 +631,28 @@ function createCompactBodyFlowElements({
   const tableRightMm = tableXMm + tableWidthMm;
   const leftSideWidthMm = Math.max(0, tableXMm - marginMm - gapMm);
   const rightSideWidthMm = Math.max(0, contentRightMm - tableRightMm - gapMm);
-  const useLeftSide = leftSideWidthMm >= rightSideWidthMm;
-  const sideWidthMm = Math.max(leftSideWidthMm, rightSideWidthMm);
-  const sideXMm = useLeftSide ? marginMm : tableRightMm + gapMm;
-  const sideAvailable = sideWidthMm >= Math.max(18, contentWidthMm * 0.22);
+  const sideRegions = [
+    {
+      id: "language-compact-body-side-left",
+      xMm: marginMm,
+      yMm: tableTopMm,
+      widthMm: leftSideWidthMm,
+      maxLines: Math.max(0, Math.floor(tableHeightMm / lineAdvanceMm))
+    },
+    {
+      id: "language-compact-body-side-right",
+      xMm: tableRightMm + gapMm,
+      yMm: tableTopMm,
+      widthMm: rightSideWidthMm,
+      maxLines: Math.max(0, Math.floor(tableHeightMm / lineAdvanceMm))
+    }
+  ]
+    .filter(
+      (region) =>
+        region.maxLines > 0 &&
+        region.widthMm >= Math.max(10, fontMm * 7.5)
+    )
+    .sort((left, right) => right.widthMm - left.widthMm);
   const regions = [
     {
       id: "language-compact-body-main",
@@ -643,17 +661,7 @@ function createCompactBodyFlowElements({
       widthMm: contentWidthMm,
       maxLines: Math.max(0, Math.floor(topHeightMm / lineAdvanceMm))
     },
-    ...(sideAvailable
-      ? [
-          {
-            id: "language-compact-body-side",
-            xMm: sideXMm,
-            yMm: tableTopMm,
-            widthMm: sideWidthMm,
-            maxLines: Math.max(0, Math.floor(tableHeightMm / lineAdvanceMm))
-          }
-        ]
-      : [])
+    ...sideRegions
   ];
   const flow = flowRichTextIntoRegions(
     text,
@@ -995,9 +1003,10 @@ function createNutritionTableElement(
   const hasRi = shouldShowRiColumn(product, label);
   const baseMeasure = formatBaseMeasure(product.nutrition);
   const columnFractions = getNutritionColumnFractions(hasServing, hasRi, label);
+  const headerText = formatNutritionHeaderText(product, languages, baseMeasure);
   const header: TableCell[] = [
     {
-      text: `${combineNutritionTitles(languages)}\n${combineValuesPerLabels(languages, baseMeasure)}`,
+      text: headerText,
       align: "center",
       weight: "bold",
       colSpan: columnFractions.length
@@ -1084,12 +1093,13 @@ function createNutritionRowHeights(
     Math.max(2, widthMm * fraction - 1.6)
   );
   const baseMeasure = formatBaseMeasure(product.nutrition);
+  const headerText = formatNutritionHeaderText(product, languages, baseMeasure);
   const lineHeight = isCompactVisualPreset(label) ? 1.08 : 1.02;
   const rowPaddingMm = clampMm(label.nutritionTableRowPaddingMm, 0.2, 2);
   const headerHeight = Math.max(
     isCompactVisualPreset(label) ? 4.2 : 4.8,
     measureRichTextHeightMm(
-      `${combineNutritionTitles(languages)}\n${combineValuesPerLabels(languages, baseMeasure)}`,
+      headerText,
       widthMm - 1.6,
       strategy.tableFontMm,
       isCompactVisualPreset(label) ? 1 : 1.05
@@ -1281,6 +1291,34 @@ function combineValuesPerLabels(
     .map((language) => valuesPerLabel(language, baseMeasure))
     .filter(Boolean)
     .join(" / ");
+}
+
+function formatNutritionHeaderText(
+  product: ProductRecord,
+  languages: LanguageCode[],
+  baseMeasure: string
+): string {
+  const customHeaders = product.nutrition.headerTextByLanguage ?? {};
+  const headerByLanguage = languages
+    .map((language) => {
+      const override = customHeaders[language]?.trim();
+
+      if (override) {
+        return override;
+      }
+
+      return `${nutritionTitle(language)} ${valuesPerLabel(language, baseMeasure)}`;
+    })
+    .filter(Boolean);
+
+  if (headerByLanguage.length) {
+    return headerByLanguage.join(" / ");
+  }
+
+  return `${combineNutritionTitles(languages)}\n${combineValuesPerLabels(
+    languages,
+    baseMeasure
+  )}`;
 }
 
 function combineNutrientLabels(

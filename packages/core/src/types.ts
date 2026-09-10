@@ -61,6 +61,7 @@ export interface NutritionTable {
   servingSize?: string;
   baseQuantity?: string;
   baseUnit?: "g" | "ml" | "kg" | "l";
+  headerTextByLanguage?: Partial<Record<LanguageCode, string>>;
   rows: NutritionRow[];
 }
 
